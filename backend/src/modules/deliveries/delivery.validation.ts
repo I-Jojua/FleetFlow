@@ -2,6 +2,7 @@
 import { z } from "zod";
 
 export const createDeliverySchema = z.object({
+  customerId: z.string().uuid().optional(),
   recipientName: z.string().trim().min(2).max(150),
   recipientPhone: z.string().trim().min(5).max(30),
 
@@ -69,6 +70,11 @@ export const updateDriverLocationSchema = z.object({
   latitude: z.coerce.number().min(-90).max(90),
   longitude: z.coerce.number().min(-180).max(180),
   accuracy: z.coerce.number().positive().optional(),
+});
+
+export const locationHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
 export type UpdateDriverLocationInput = z.infer<

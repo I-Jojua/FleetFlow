@@ -6,7 +6,9 @@ import {
   updateDeliveryStatusSchema,
   deliveryQuerySchema,
   updateDriverLocationSchema,
+  locationHistoryQuerySchema,
 } from "./delivery.validation.js";
+import { validateUuidParam } from "../../middleware/request-validation.js";
 
 // --- დამხმარე ფუნქციები (Helpers) ---
 
@@ -17,15 +19,7 @@ function isStaffMember(role: string): boolean {
 }
 
 function validateDeliveryId(req: Request, res: Response): string | null {
-  const deliveryId = req.params.id;
-  if (typeof deliveryId !== "string" || deliveryId.trim().length === 0) {
-    res.status(400).json({
-      success: false,
-      message: "Invalid delivery ID.",
-    });
-    return null;
-  }
-  return deliveryId;
+  return validateUuidParam(req, res, "Delivery");
 }
 
 // --- კონტროლერები ---
@@ -37,9 +31,36 @@ export async function createDelivery(
 ) {
   try {
     const data = createDeliverySchema.parse(req.body);
-    const customerId = req.user!.id;
+    const user = req.user!;
+    const isStaff = isStaffMember(user.role);
 
-    const delivery = await deliveryService.createDelivery(customerId, data);
+    if (!isStaff && user.role !== "CUSTOMER") {
+      return res.status(403).json({
+        success: false,
+        code: "FORBIDDEN",
+        message: "You are not allowed to create a delivery.",
+      });
+    }
+
+    if (isStaff && !data.customerId) {
+      return res.status(400).json({
+        success: false,
+        code: "VALIDATION_FAILED",
+        message: "customerId is required when staff creates a delivery.",
+      });
+    }
+
+    if (user.role === "CUSTOMER" && data.customerId && data.customerId !== user.id) {
+      return res.status(403).json({
+        success: false,
+        code: "FORBIDDEN",
+        message: "A customer can only create deliveries for their own account.",
+      });
+    }
+
+    const customerId = user.role === "CUSTOMER" ? user.id : data.customerId!;
+
+    const delivery = await deliveryService.createDelivery(customerId, data, user.id);
 
     return res.status(201).json({
       success: true,
@@ -119,12 +140,21 @@ export async function assignDriver(
     const deliveryId = validateDeliveryId(req, res);
     if (!deliveryId) return;
 
+    if (!isStaffMember(req.user!.role)) {
+      return res.status(403).json({
+        success: false,
+        code: "FORBIDDEN",
+        message: "Only staff can assign or reassign a driver.",
+      });
+    }
+
     const { driverId } = assignDriverSchema.parse(req.body);
 
     const delivery = await deliveryService.assignDriver(
       deliveryId,
       driverId,
       req.user!.id,
+      req.user!.role,
     );
 
     return res.status(200).json({
@@ -166,29 +196,9 @@ export async function updateDeliveryStatus(
     const { status } = updateDeliveryStatusSchema.parse(req.body);
     const user = req.user!;
 
-    const delivery = await deliveryService.getDeliveryById(deliveryId);
-
-    if (!delivery) {
-      return res.status(404).json({
-        success: false,
-        message: "Delivery not found.",
-      });
-    }
-
-    const isStaff = isStaffMember(user.role);
-    const isAssignedDriver =
-      user.role === "DRIVER" && delivery.driverId === user.id;
-
-    if (!isStaff && !isAssignedDriver) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not allowed to update this delivery.",
-      });
-    }
-
     const updated = await deliveryService.updateDeliveryStatus(
       deliveryId,
-      user.id,
+      user,
       status,
     );
 
@@ -377,11 +387,19 @@ export async function getDriverLocationHistory(
     const deliveryId = validateDeliveryId(req, res);
     if (!deliveryId) return;
 
-    const page = Math.max(1, Number(req.query.page) || 1);
-    const limit = Math.min(
-      100,
-      Math.max(1, Number(req.query.limit) || 50),
-    );
+    const parsedPagination = locationHistoryQuerySchema.safeParse(req.query);
+    if (!parsedPagination.success) {
+      return res.status(400).json({
+        success: false,
+        code: "VALIDATION_FAILED",
+        message: "Invalid pagination parameters.",
+        errors: parsedPagination.error.issues.map((issue) => ({
+          path: issue.path.map(String),
+          message: issue.message,
+        })),
+      });
+    }
+    const { page, limit } = parsedPagination.data;
 
     const delivery = await deliveryService.getDeliveryById(deliveryId);
 

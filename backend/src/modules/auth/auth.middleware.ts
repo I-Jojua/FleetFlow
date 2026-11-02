@@ -5,6 +5,7 @@ import jwt from "jsonwebtoken";
 import { prisma } from "../../config/prisma.js";
 import { env } from "../../config/env.js";
 import { UserStatus } from "../../generated/prisma/client.js";
+import { logger } from "../../utils/logger.js";
 
 export const authenticate: RequestHandler = async (req, res, next): Promise<void> => {
   const authorization = req.headers.authorization;
@@ -73,8 +74,10 @@ export const authenticate: RequestHandler = async (req, res, next): Promise<void
     };
 
     next();
-  } catch (error) {
-    console.error("Authentication middleware error:", error);
+  } catch {
+    logger.error("authentication_middleware_failed", {
+      requestId: typeof res.locals?.requestId === "string" ? res.locals.requestId : undefined,
+    });
 
     res.status(500).json({
       success: false,

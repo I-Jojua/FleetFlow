@@ -11,6 +11,13 @@ import {
 } from "./auth.validation.js";
 
 import { AuthError } from "./auth.types.js";
+import { logger } from "../../utils/logger.js";
+
+const safeValidationErrors = (issues: Array<{ path: PropertyKey[]; message: string }>) =>
+  issues.map((issue) => ({
+    path: issue.path.map(String),
+    message: issue.message,
+  }));
 
 const handleError = (res: Response, error: unknown) => {
   if (error instanceof AuthError) {
@@ -20,7 +27,9 @@ const handleError = (res: Response, error: unknown) => {
     });
   }
 
-  console.error("Authentication error:", error);
+  logger.error("authentication_request_failed", {
+    requestId: typeof res.locals?.requestId === "string" ? res.locals.requestId : undefined,
+  });
 
   return res.status(500).json({
     success: false,
@@ -36,7 +45,7 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: "Validation failed.",
-        errors: validation.error.issues,
+        errors: safeValidationErrors(validation.error.issues),
       });
     }
 
@@ -60,7 +69,7 @@ export const login = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: "Validation failed.",
-        errors: validation.error.issues,
+        errors: safeValidationErrors(validation.error.issues),
       });
     }
 

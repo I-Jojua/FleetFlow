@@ -1,16 +1,15 @@
-import { Router } from "express";
-
+﻿import { Router } from "express";
 import * as controller from "./delivery.controller";
-
 import { authenticate } from "./../auth/auth.middleware";
-
 import { authorizeRoles } from "./../auth/role.middleware";
+import { publicTrackingRateLimiter } from "../../middleware/rate-limit.middleware.js";
 
 const router = Router();
 
 // Public tracking
 router.get(
   "/track/:trackingCode",
+  publicTrackingRateLimiter,
   controller.trackDelivery,
 );
 
@@ -62,12 +61,7 @@ router.patch(
 // Update delivery status
 router.patch(
   "/:id/status",
-  authorizeRoles(
-    "DRIVER",
-    "ADMIN",
-    "SUPER_ADMIN",
-    "DISPATCHER",
-  ),
+  authorizeRoles("CUSTOMER", "DRIVER", "ADMIN", "SUPER_ADMIN", "DISPATCHER"),
   controller.updateDeliveryStatus,
 );
 
@@ -84,7 +78,16 @@ router.get(
   controller.getDriverLocation,
 );
 
+// Get driver's GPS location history
+router.get(
+  "/:id/location/history",
+  controller.getDriverLocationHistory,
+);
+
 // Get delivery
-router.get("/:id", controller.getDelivery);
+router.get(
+  "/:id",
+  controller.getDelivery,
+);
 
 export default router;

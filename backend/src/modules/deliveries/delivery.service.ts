@@ -1,7 +1,9 @@
 
 import { randomBytes } from "node:crypto";
-import { Prisma } from "../../generated/prisma/client";
+import type { UserRole } from "../../generated/prisma/client";
 import { prisma } from "../../config/prisma";
+import { createNotificationsBestEffort } from "../notifications/notification.service";
+import { sendSlackAlertBestEffort } from "../notifications/slack.service";
 import type {
   CreateDeliveryInput,
 } from "./delivery.validation";
@@ -13,8 +15,22 @@ function generateTrackingCode(): string {
 export async function createDelivery(
   customerId: string,
   data: CreateDeliveryInput,
+  actorId = customerId,
 ) {
-  return prisma.$transaction(async (tx) => {
+  const delivery = await prisma.$transaction(async (tx) => {
+    const customer = await tx.user.findFirst({
+      where: {
+        id: customerId,
+        role: "CUSTOMER",
+        status: "ACTIVE",
+      },
+      select: { id: true },
+    });
+
+    if (!customer) {
+      throw new Error("CUSTOMER_NOT_FOUND");
+    }
+
     const delivery = await tx.delivery.create({
       data: {
         trackingCode: generateTrackingCode(),
@@ -36,7 +52,7 @@ export async function createDelivery(
     await tx.deliveryEvent.create({
       data: {
         deliveryId: delivery.id,
-        actorId: customerId,
+        actorId,
         status: "PENDING",
         description: "Delivery order created",
       },
@@ -44,6 +60,22 @@ export async function createDelivery(
 
     return delivery;
   });
+
+  await Promise.all([
+    createNotificationsBestEffort([{
+      userId: customerId,
+      deliveryId: delivery.id,
+      type: "DELIVERY_UPDATE",
+      title: "Delivery created",
+      message: `Your delivery ${delivery.trackingCode} has been created.`,
+    }]),
+    sendSlackAlertBestEffort(
+      "delivery_created",
+      `New delivery created: ${delivery.trackingCode}`,
+    ),
+  ]);
+
+  return delivery;
 }
 
 export async function getCustomerDeliveries(customerId: string) {
@@ -90,8 +122,13 @@ export async function assignDriver(
   deliveryId: string,
   driverId: string,
   actorId: string,
+  actorRole: UserRole,
 ) {
-  return prisma.$transaction(async (tx) => {
+  if (!["ADMIN", "SUPER_ADMIN", "DISPATCHER"].includes(actorRole)) {
+    throw new Error("DELIVERY_FORBIDDEN");
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
     const delivery = await tx.delivery.findUnique({
       where: { id: deliveryId },
     });
@@ -119,14 +156,41 @@ export async function assignDriver(
       throw new Error("DRIVER_NOT_FOUND_OR_INACTIVE");
     }
 
-    const updated = await tx.delivery.update({
-      where: { id: deliveryId },
+    if (delivery.status === "ASSIGNED" && delivery.driverId === driverId) {
+      return {
+        delivery,
+        customerId: delivery.customerId,
+        driverId: driver.id,
+        previousDriverId: null,
+        trackingCode: delivery.trackingCode,
+        changed: false,
+      };
+    }
+
+    const assignment = await tx.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        status: delivery.status,
+        driverId: delivery.driverId,
+      },
       data: {
         driverId,
         status: "ASSIGNED",
         assignedAt: new Date(),
       },
     });
+
+    if (assignment.count !== 1) {
+      throw new Error("DELIVERY_STATE_CONFLICT");
+    }
+
+    const updated = await tx.delivery.findUnique({
+      where: { id: deliveryId },
+    });
+
+    if (!updated) {
+      throw new Error("DELIVERY_NOT_FOUND");
+    }
 
     await tx.deliveryEvent.create({
       data: {
@@ -137,8 +201,57 @@ export async function assignDriver(
       },
     });
 
-    return updated;
-  });
+    return {
+      delivery: updated,
+      customerId: delivery.customerId,
+      driverId: driver.id,
+      previousDriverId:
+        delivery.driverId && delivery.driverId !== driver.id
+          ? delivery.driverId
+          : null,
+      trackingCode: delivery.trackingCode,
+      changed: true,
+    };
+  }, { isolationLevel: "Serializable" });
+
+  if (!result.changed) return result.delivery;
+
+  const assignmentNotifications = [
+    {
+      userId: result.customerId,
+      deliveryId: result.delivery.id,
+      type: "DELIVERY_UPDATE" as const,
+      title: "Driver assigned",
+      message: `A driver has been assigned to delivery ${result.trackingCode}.`,
+    },
+    {
+      userId: result.driverId,
+      deliveryId: result.delivery.id,
+      type: "DELIVERY_UPDATE" as const,
+      title: "Delivery assigned to you",
+      message: `You have been assigned delivery ${result.trackingCode}.`,
+    },
+  ];
+
+  if (result.previousDriverId) {
+    assignmentNotifications.push({
+      userId: result.previousDriverId,
+      deliveryId: result.delivery.id,
+      type: "DELIVERY_UPDATE",
+      title: "Delivery reassigned",
+      message: `Delivery ${result.trackingCode} has been reassigned to another driver.`,
+    });
+  }
+
+  await Promise.all([
+    createNotificationsBestEffort(assignmentNotifications),
+    sendSlackAlertBestEffort(
+      "driver_assigned",
+      `Driver assigned to delivery ${result.trackingCode}`,
+    ),
+  ]);
+
+  return result.delivery;
 }
 
 export async function getAllDeliveries() {
@@ -166,10 +279,10 @@ export async function getAllDeliveries() {
 
 export async function updateDeliveryStatus(
   deliveryId: string,
-  actorId: string,
+  actor: { id: string; role: UserRole },
   newStatus: "PICKED_UP" | "IN_TRANSIT" | "DELIVERED" | "CANCELLED",
 ) {
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const delivery = await tx.delivery.findUnique({
       where: { id: deliveryId },
     });
@@ -178,7 +291,22 @@ export async function updateDeliveryStatus(
       throw new Error("DELIVERY_NOT_FOUND");
     }
 
+    const staffRoles: UserRole[] = ["ADMIN", "SUPER_ADMIN", "DISPATCHER"];
+    const isStaff = staffRoles.includes(actor.role);
+    const isAssignedDriver =
+      actor.role === "DRIVER" && delivery.driverId === actor.id;
+    const isCustomerCancellingOwnPendingDelivery =
+      actor.role === "CUSTOMER" &&
+      delivery.customerId === actor.id &&
+      delivery.status === "PENDING" &&
+      newStatus === "CANCELLED";
+
+    if (!isStaff && !isAssignedDriver && !isCustomerCancellingOwnPendingDelivery) {
+      throw new Error("DELIVERY_FORBIDDEN");
+    }
+
     const allowedTransitions: Record<string, string[]> = {
+      PENDING: ["CANCELLED"],
       ASSIGNED: ["PICKED_UP", "CANCELLED"],
       PICKED_UP: ["IN_TRANSIT"],
       IN_TRANSIT: ["DELIVERED"],
@@ -188,8 +316,12 @@ export async function updateDeliveryStatus(
       throw new Error("INVALID_STATUS_TRANSITION");
     }
 
-    const updated = await tx.delivery.update({
-      where: { id: deliveryId },
+    const updateResult = await tx.delivery.updateMany({
+      where: {
+        id: deliveryId,
+        status: delivery.status,
+        driverId: delivery.driverId,
+      },
       data: {
         status: newStatus,
         ...(newStatus === "PICKED_UP" && {
@@ -201,17 +333,57 @@ export async function updateDeliveryStatus(
       },
     });
 
+    if (updateResult.count !== 1) {
+      throw new Error("DELIVERY_STATE_CONFLICT");
+    }
+
+    const updated = await tx.delivery.findUnique({
+      where: { id: deliveryId },
+    });
+
+    if (!updated) {
+      throw new Error("DELIVERY_NOT_FOUND");
+    }
+
     await tx.deliveryEvent.create({
       data: {
         deliveryId,
-        actorId,
+        actorId: actor.id,
         status: newStatus,
         description: `Delivery status changed to ${newStatus}`,
       },
     });
 
-    return updated;
-  });
+    return {
+      delivery: updated,
+      customerId: delivery.customerId,
+      driverId: delivery.driverId,
+      trackingCode: delivery.trackingCode,
+    };
+  }, { isolationLevel: "Serializable" });
+
+  const statusLabel = newStatus.toLowerCase().replaceAll("_", " ");
+  const recipients = [result.customerId, result.driverId].filter(
+    (userId): userId is string => userId !== null,
+  );
+
+  await Promise.all([
+    createNotificationsBestEffort(
+      recipients.map((userId) => ({
+        userId,
+        deliveryId: result.delivery.id,
+        type: "DELIVERY_UPDATE" as const,
+        title: "Delivery status updated",
+        message: `Delivery ${result.trackingCode} is now ${statusLabel}.`,
+      })),
+    ),
+    sendSlackAlertBestEffort(
+      "delivery_status_updated",
+      `Delivery ${result.trackingCode} status updated: ${statusLabel}`,
+    ),
+  ]);
+
+  return result.delivery;
 }
 
 export async function trackDelivery(trackingCode: string) {
@@ -222,9 +394,6 @@ export async function trackDelivery(trackingCode: string) {
     select: {
       trackingCode: true,
       status: true,
-      recipientName: true,
-      pickupAddress: true,
-      deliveryAddress: true,
       createdAt: true,
       assignedAt: true,
       pickedUpAt: true,
@@ -232,7 +401,6 @@ export async function trackDelivery(trackingCode: string) {
       events: {
         select: {
           status: true,
-          description: true,
           createdAt: true,
         },
         orderBy: {

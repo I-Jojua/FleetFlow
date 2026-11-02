@@ -1,0 +1,798 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FleetFlow API",
+    "version": "1.0.0",
+    "description": "FleetFlow delivery, customer, driver, tracking, notification, health, and operations API. The access token is a JWT sent as `Authorization: Bearer <accessToken>`. Refresh tokens are opaque values sent in JSON request bodies."
+  },
+  "servers": [
+    { "url": "http://localhost:5000", "description": "Local development server" }
+  ],
+  "tags": [
+    { "name": "Root" },
+    { "name": "Health" },
+    { "name": "Authentication" },
+    { "name": "Deliveries" },
+    { "name": "Drivers" },
+    { "name": "Customers" },
+    { "name": "Notifications" },
+    { "name": "Operations" }
+  ],
+  "security": [{ "BearerAuth": [] }],
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "getApiWelcome",
+        "tags": ["Root"],
+        "summary": "API welcome and version",
+        "security": [],
+        "responses": {
+          "200": { "description": "API welcome response.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "getLiveness",
+        "tags": ["Health"],
+        "summary": "Liveness probe",
+        "description": "Lightweight process liveness check. Does not verify PostgreSQL or Redis.",
+        "security": [],
+        "responses": {
+          "200": { "description": "The process is running.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } }
+        }
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "operationId": "getReadiness",
+        "tags": ["Health"],
+        "summary": "Readiness probe",
+        "description": "Checks PostgreSQL and Redis. Returns only dependency availability flags and no connection details.",
+        "security": [],
+        "responses": {
+          "200": { "description": "Both required dependencies are available.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReadinessEnvelope" } } } },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" }
+        }
+      }
+    },
+    "/api/v1/health/metrics": {
+      "get": {
+        "operationId": "getOperationalMetrics",
+        "tags": ["Operations"],
+        "summary": "Read in-process operational metrics",
+        "description": "Returns process-local request totals, status counts, duration summary, error count, and last observed dependency availability. Disabled with 404 unless METRICS_ACCESS_TOKEN is configured. Requires its bearer token; this endpoint is not public.",
+        "security": [{ "MetricsBearerAuth": [] }],
+        "responses": {
+          "200": { "description": "Metrics snapshot.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MetricsEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/docs": {
+      "get": {
+        "operationId": "getSwaggerUi",
+        "tags": ["Operations"],
+        "summary": "Interactive Swagger UI",
+        "description": "Enabled by default outside production. Production docs are off unless explicitly enabled; when enabled, HTTP Basic username `docs` and API_DOCS_ACCESS_TOKEN as the password are required.",
+        "security": [{ "DocsBasicAuth": [] }],
+        "responses": {
+          "200": { "description": "Swagger UI HTML page.", "content": { "text/html": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/docs/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "tags": ["Operations"],
+        "summary": "Download the OpenAPI document",
+        "security": [{ "DocsBasicAuth": [] }],
+        "responses": {
+          "200": { "description": "OpenAPI 3.1 document.", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/docs/swagger-initializer.js": {
+      "get": {
+        "operationId": "getSwaggerInitializer",
+        "tags": ["Operations"],
+        "summary": "Load Swagger UI configuration",
+        "security": [{ "DocsBasicAuth": [] }],
+        "responses": {
+          "200": { "description": "Swagger UI initializer script.", "content": { "application/javascript": { "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "operationId": "register",
+        "tags": ["Authentication"],
+        "summary": "Register a customer account",
+        "security": [],
+        "x-required-roles": [],
+        "requestBody": { "$ref": "#/components/requestBodies/RegisterRequest" },
+        "responses": {
+          "201": { "description": "Account and token pair created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "409": { "description": "Email or phone is already registered.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "tags": ["Authentication"],
+        "summary": "Authenticate with email and password",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/LoginRequest" },
+        "responses": {
+          "200": { "description": "Authenticated user and token pair.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "description": "Credentials are invalid.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
+          "403": { "description": "Account is not active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refreshTokens",
+        "tags": ["Authentication"],
+        "summary": "Rotate a refresh token",
+        "description": "Refresh-token reuse revokes all active sessions for the user.",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/RefreshTokenRequest" },
+        "responses": {
+          "200": { "description": "New access and refresh tokens.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "description": "Refresh token is invalid, expired, or already used.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
+          "403": { "description": "Account is not active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "tags": ["Authentication"],
+        "summary": "Revoke a refresh token",
+        "description": "Accepts a refresh token in the request body; route does not require an access token.",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/RefreshTokenRequest" },
+        "responses": {
+          "200": { "description": "Logout response.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "getCurrentUser",
+        "tags": ["Authentication"],
+        "summary": "Get the authenticated user's profile",
+        "responses": {
+          "200": { "description": "Current user profile.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/track/{trackingCode}": {
+      "get": {
+        "operationId": "trackDelivery",
+        "tags": ["Deliveries"],
+        "summary": "Public delivery tracking",
+        "description": "Returns tracking code, status, lifecycle timestamps, and event status/timestamps. Recipient identity, addresses, and event descriptions are intentionally omitted.",
+        "security": [],
+        "parameters": [{ "$ref": "#/components/parameters/TrackingCode" }],
+        "responses": {
+          "200": { "description": "Privacy-limited tracking result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TrackingEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries": {
+      "post": {
+        "operationId": "createDelivery",
+        "tags": ["Deliveries"],
+        "summary": "Create a delivery",
+        "description": "Customers create deliveries for their own account. Admin and super-admin callers must provide customerId. The route does not permit dispatchers.",
+        "x-required-roles": ["CUSTOMER", "ADMIN", "SUPER_ADMIN"],
+        "requestBody": { "$ref": "#/components/requestBodies/CreateDeliveryRequest" },
+        "responses": {
+          "201": { "description": "Delivery created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Selected customer was not found or active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "get": {
+        "operationId": "searchDeliveries",
+        "tags": ["Deliveries"],
+        "summary": "Search and paginate deliveries",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/DeliveryStatus" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/Limit10" }
+        ],
+        "responses": {
+          "200": { "description": "Matching deliveries and pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedDeliveryEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/my": {
+      "get": {
+        "operationId": "getCustomerDeliveries",
+        "tags": ["Deliveries"],
+        "summary": "List the authenticated customer's deliveries",
+        "x-required-roles": ["CUSTOMER"],
+        "responses": {
+          "200": { "description": "The customer's delivery array.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryListEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/assigned": {
+      "get": {
+        "operationId": "getAssignedDeliveries",
+        "tags": ["Deliveries"],
+        "summary": "List deliveries assigned to the authenticated driver",
+        "x-required-roles": ["DRIVER"],
+        "responses": {
+          "200": { "description": "Assigned-delivery array and count.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryCountEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/statistics": {
+      "get": {
+        "operationId": "getDeliveryStatistics",
+        "tags": ["Deliveries"],
+        "summary": "Get delivery counts by status",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "responses": {
+          "200": { "description": "Delivery totals grouped by lifecycle status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/{id}": {
+      "get": {
+        "operationId": "getDelivery",
+        "tags": ["Deliveries"],
+        "summary": "Get delivery details",
+        "description": "Accessible to staff, the owning customer, or the assigned driver.",
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Delivery with customer, driver, and event details.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/{id}/assign": {
+      "patch": {
+        "operationId": "assignDriverToDelivery",
+        "tags": ["Deliveries"],
+        "summary": "Assign or reassign a driver",
+        "description": "Available for PENDING deliveries and reassignment of ASSIGNED deliveries. Notifies the new and previous driver where applicable.",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/AssignDriverRequest" },
+        "responses": {
+          "200": { "description": "Updated delivery.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/{id}/status": {
+      "patch": {
+        "operationId": "updateDeliveryStatus",
+        "tags": ["Deliveries"],
+        "summary": "Advance or cancel a delivery",
+        "description": "Transitions: PENDING→CANCELLED; ASSIGNED→PICKED_UP or CANCELLED; PICKED_UP→IN_TRANSIT; IN_TRANSIT→DELIVERED. Staff may update delivery status; drivers may update only their assigned delivery; customers may cancel only their own PENDING delivery.",
+        "x-required-roles": ["CUSTOMER", "DRIVER", "ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/UpdateDeliveryStatusRequest" },
+        "responses": {
+          "200": { "description": "Updated delivery.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/{id}/location": {
+      "patch": {
+        "operationId": "updateDriverLocation",
+        "tags": ["Deliveries"],
+        "summary": "Record the authenticated driver's GPS location",
+        "description": "The caller must be the assigned driver and the delivery must be PICKED_UP or IN_TRANSIT.",
+        "x-required-roles": ["DRIVER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/DriverLocationRequest" },
+        "responses": {
+          "201": { "description": "Location recorded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LocationSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "get": {
+        "operationId": "getLatestDriverLocation",
+        "tags": ["Deliveries"],
+        "summary": "Get latest driver location for a delivery",
+        "description": "Accessible to staff, the owning customer, or assigned driver. Data is null when no location has been recorded.",
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Latest location or null.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NullableLocationEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/deliveries/{id}/location/history": {
+      "get": {
+        "operationId": "getDriverLocationHistory",
+        "tags": ["Deliveries"],
+        "summary": "Get paginated driver location history",
+        "description": "Accessible to staff, the owning customer, or assigned driver. Pagination is returned inside data.pagination for this endpoint.",
+        "parameters": [
+          { "$ref": "#/components/parameters/UuidId" },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/LocationLimit" }
+        ],
+        "responses": {
+          "200": { "description": "Chronological location history with pagination nested under data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LocationHistoryEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/drivers": {
+      "post": {
+        "operationId": "createDriver",
+        "tags": ["Drivers"],
+        "summary": "Create a driver account",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "requestBody": { "$ref": "#/components/requestBodies/CreateStaffUserRequest" },
+        "responses": {
+          "201": { "description": "Driver created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "get": {
+        "operationId": "listDrivers",
+        "tags": ["Drivers"],
+        "summary": "Search and paginate drivers",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/UserStatus" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/Limit10" }
+        ],
+        "responses": {
+          "200": { "description": "Driver array with pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedUserEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/drivers/{id}": {
+      "get": {
+        "operationId": "getDriver",
+        "tags": ["Drivers"],
+        "summary": "Get driver profile and recent deliveries",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Driver profile with up to ten recent assigned deliveries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "patch": {
+        "operationId": "updateDriver",
+        "tags": ["Drivers"],
+        "summary": "Update driver name or phone",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/UpdateDriverRequest" },
+        "responses": {
+          "200": { "description": "Driver updated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/drivers/{id}/status": {
+      "patch": {
+        "operationId": "updateDriverStatus",
+        "tags": ["Drivers"],
+        "summary": "Change driver account status",
+        "description": "Driver deactivation/suspension is rejected while ASSIGNED, PICKED_UP, or IN_TRANSIT deliveries remain.",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/UpdateStatusRequest" },
+        "responses": {
+          "200": { "description": "Updated driver status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/drivers/{id}/statistics": {
+      "get": {
+        "operationId": "getDriverStatistics",
+        "tags": ["Drivers"],
+        "summary": "Get driver delivery counts by status",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Driver identity and delivery totals by status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/customers": {
+      "post": {
+        "operationId": "createCustomer",
+        "tags": ["Customers"],
+        "summary": "Create a customer account",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "requestBody": { "$ref": "#/components/requestBodies/CreateStaffUserRequest" },
+        "responses": {
+          "201": { "description": "Customer created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "get": {
+        "operationId": "listCustomers",
+        "tags": ["Customers"],
+        "summary": "Search and paginate customers",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [
+          { "name": "search", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/UserStatus" } },
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/Limit10" }
+        ],
+        "responses": {
+          "200": { "description": "Customer array with pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedUserEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/customers/{id}": {
+      "get": {
+        "operationId": "getCustomer",
+        "tags": ["Customers"],
+        "summary": "Get customer profile and recent deliveries",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Customer profile with up to ten recent deliveries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "patch": {
+        "operationId": "updateCustomer",
+        "tags": ["Customers"],
+        "summary": "Update customer name or phone",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/UpdateCustomerRequest" },
+        "responses": {
+          "200": { "description": "Customer updated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/customers/{id}/status": {
+      "patch": {
+        "operationId": "updateCustomerStatus",
+        "tags": ["Customers"],
+        "summary": "Change customer account status",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "requestBody": { "$ref": "#/components/requestBodies/UpdateStatusRequest" },
+        "responses": {
+          "200": { "description": "Updated customer status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/customers/{id}/statistics": {
+      "get": {
+        "operationId": "getCustomerStatistics",
+        "tags": ["Customers"],
+        "summary": "Get customer delivery counts by status",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Customer identity and delivery totals by status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/notifications": {
+      "get": {
+        "operationId": "listNotifications",
+        "tags": ["Notifications"],
+        "summary": "List notifications for the current user",
+        "parameters": [
+          { "$ref": "#/components/parameters/Page" },
+          { "$ref": "#/components/parameters/Limit10" },
+          { "name": "unreadOnly", "in": "query", "description": "When true, include only unread notifications. Accepted query strings are true or false.", "schema": { "type": "string", "enum": ["true", "false"] } }
+        ],
+        "responses": {
+          "200": { "description": "Notifications and top-level pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedNotificationEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/notifications/unread-count": {
+      "get": {
+        "operationId": "getUnreadNotificationCount",
+        "tags": ["Notifications"],
+        "summary": "Get unread notification count for the current user",
+        "responses": {
+          "200": { "description": "Unread count.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnreadCountEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/notifications/read-all": {
+      "patch": {
+        "operationId": "markAllNotificationsRead",
+        "tags": ["Notifications"],
+        "summary": "Mark all current user's unread notifications as read",
+        "responses": {
+          "200": { "description": "Number of updated notification records.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdatedCountEnvelope" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/notifications/{id}/read": {
+      "patch": {
+        "operationId": "markNotificationRead",
+        "tags": ["Notifications"],
+        "summary": "Mark one current user's notification as read",
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "responses": {
+          "200": { "description": "Updated notification.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "Access token returned by register, login, or refresh." },
+      "MetricsBearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "opaque", "description": "Value configured in METRICS_ACCESS_TOKEN. Metrics return 404 while this token is not configured." },
+      "DocsBasicAuth": { "type": "http", "scheme": "basic", "description": "Production only when API_DOCS_ENABLED=true. Use username docs and API_DOCS_ACCESS_TOKEN as password. Development access has no Basic auth." }
+    },
+    "parameters": {
+      "UuidId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
+      "TrackingCode": { "name": "trackingCode", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1, "example": "FF-ABC123DEF456" } },
+      "Page": { "name": "page", "in": "query", "description": "1-based page number.", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
+      "Limit10": { "name": "limit", "in": "query", "description": "Page size, maximum 100.", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 } },
+      "LocationLimit": { "name": "limit", "in": "query", "description": "Page size for location history, maximum 100.", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+    },
+    "requestBodies": {
+      "RegisterRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterRequest" } } } },
+      "LoginRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } } },
+      "RefreshTokenRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshTokenRequest" } } } },
+      "CreateDeliveryRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateDeliveryRequest" } } } },
+      "AssignDriverRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssignDriverRequest" } } } },
+      "UpdateDeliveryStatusRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateDeliveryStatusRequest" } } } },
+      "DriverLocationRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DriverLocationRequest" } } } },
+      "CreateStaffUserRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateStaffUserRequest" } } } },
+      "UpdateDriverRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateDriverRequest" } } } },
+      "UpdateCustomerRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCustomerRequest" } } } },
+      "UpdateStatusRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateStatusRequest" } } } }
+    },
+    "responses": {
+      "Validation": { "description": "Validation failure. Controller-specific errors may use a flat field map or an array of path/message entries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Unauthorized": { "description": "Authentication is missing or invalid.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Forbidden": { "description": "Caller is authenticated but lacks the required role or resource ownership.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "NotFound": { "description": "Resource was not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "Conflict": { "description": "Unique constraint, lifecycle, or concurrent update conflict.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "RateLimited": { "description": "Endpoint request limit exceeded.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "DependencyUnavailable": { "description": "A required dependency or rate-limit store is unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
+      "InternalError": { "description": "Unexpected server error. Internal details are not returned.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+    },
+    "schemas": {
+      "SuccessEnvelope": { "type": "object", "required": ["success"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": {}, "pagination": { "$ref": "#/components/schemas/Pagination" }, "count": { "type": "integer" } } },
+      "MessageSuccessEnvelope": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": true }, "message": { "type": "string" } } },
+      "ErrorEnvelope": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": false }, "code": { "type": "string" }, "message": { "type": "string" }, "errors": {} } },
+      "MessageError": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": false }, "message": { "type": "string" } } },
+      "Pagination": { "type": "object", "required": ["total", "page", "limit", "totalPages", "hasNextPage", "hasPreviousPage"], "properties": { "total": { "type": "integer" }, "page": { "type": "integer", "minimum": 1 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "totalPages": { "type": "integer" }, "hasNextPage": { "type": "boolean" }, "hasPreviousPage": { "type": "boolean" } } },
+      "UserRole": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "DISPATCHER", "DRIVER", "CUSTOMER"] },
+      "UserStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"] },
+      "DeliveryStatus": { "type": "string", "enum": ["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] },
+      "AuthUser": { "type": "object", "required": ["id", "firstName", "lastName", "email", "phone", "role", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "firstName": { "type": "string" }, "lastName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": ["string", "null"] }, "role": { "$ref": "#/components/schemas/UserRole" }, "status": { "$ref": "#/components/schemas/UserStatus" } } },
+      "Tokens": { "type": "object", "required": ["accessToken", "refreshToken", "tokenType", "expiresIn"], "properties": { "accessToken": { "type": "string" }, "refreshToken": { "type": "string" }, "tokenType": { "const": "Bearer" }, "expiresIn": { "type": "integer", "description": "Access token lifetime in seconds." } } },
+      "AuthSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "required": ["user", "tokens"], "properties": { "user": { "$ref": "#/components/schemas/AuthUser" }, "tokens": { "$ref": "#/components/schemas/Tokens" } } } } },
+      "TokenSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/Tokens" } } },
+      "UserSuccessEnvelope": { "allOf": [{ "$ref": "#/components/schemas/SuccessEnvelope" }, { "type": "object", "properties": { "data": { "type": "object", "additionalProperties": true } } }] },
+      "DeliverySuccessEnvelope": { "allOf": [{ "$ref": "#/components/schemas/SuccessEnvelope" }, { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/Delivery" } } }] },
+      "DeliveryListEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } } } },
+      "DeliveryCountEnvelope": { "type": "object", "required": ["success", "count", "data"], "properties": { "success": { "const": true }, "count": { "type": "integer" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } } } },
+      "PaginatedDeliveryEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
+      "PaginatedUserEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
+      "Delivery": { "type": "object", "description": "Delivery record. Detail/list endpoints may include related customer, driver, and events depending on endpoint.", "properties": { "id": { "type": "string", "format": "uuid" }, "trackingCode": { "type": "string" }, "customerId": { "type": "string", "format": "uuid" }, "driverId": { "type": ["string", "null"], "format": "uuid" }, "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "recipientName": { "type": "string" }, "recipientPhone": { "type": "string" }, "pickupAddress": { "type": "string" }, "pickupLatitude": { "type": ["number", "null"] }, "pickupLongitude": { "type": ["number", "null"] }, "deliveryAddress": { "type": "string" }, "deliveryLatitude": { "type": ["number", "null"] }, "deliveryLongitude": { "type": ["number", "null"] }, "packageDescription": { "type": ["string", "null"] }, "packageWeight": { "type": ["number", "null"] }, "notes": { "type": ["string", "null"] }, "assignedAt": { "type": ["string", "null"], "format": "date-time" }, "pickedUpAt": { "type": ["string", "null"], "format": "date-time" }, "deliveredAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } } },
+      "TrackingEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "object", "required": ["trackingCode", "status", "createdAt", "events"], "properties": { "trackingCode": { "type": "string" }, "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "createdAt": { "type": "string", "format": "date-time" }, "assignedAt": { "type": ["string", "null"], "format": "date-time" }, "pickedUpAt": { "type": ["string", "null"], "format": "date-time" }, "deliveredAt": { "type": ["string", "null"], "format": "date-time" }, "events": { "type": "array", "items": { "type": "object", "required": ["status", "createdAt"], "properties": { "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "createdAt": { "type": "string", "format": "date-time" } } } } } } } },
+      "DriverLocation": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "accuracy": { "type": ["number", "null"] }, "recordedAt": { "type": "string", "format": "date-time" }, "driverId": { "type": "string", "format": "uuid" } } },
+      "LocationSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/DriverLocation" } } },
+      "NullableLocationEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "oneOf": [{ "$ref": "#/components/schemas/DriverLocation" }, { "type": "null" }] } } },
+      "LocationHistoryEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "required": ["locations", "pagination"], "properties": { "locations": { "type": "array", "items": { "$ref": "#/components/schemas/DriverLocation" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } } } },
+      "StatisticsEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "driver": { "type": "object" }, "customer": { "type": "object" }, "deliveries": { "$ref": "#/components/schemas/StatusCounts" }, "total": { "type": "integer" }, "pending": { "type": "integer" }, "assigned": { "type": "integer" }, "pickedUp": { "type": "integer" }, "inTransit": { "type": "integer" }, "delivered": { "type": "integer" }, "cancelled": { "type": "integer" } } } } },
+      "StatusCounts": { "type": "object", "properties": { "total": { "type": "integer" }, "pending": { "type": "integer" }, "assigned": { "type": "integer" }, "pickedUp": { "type": "integer" }, "inTransit": { "type": "integer" }, "delivered": { "type": "integer" }, "cancelled": { "type": "integer" } } },
+      "ReadinessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "properties": { "status": { "const": "ready" }, "dependencies": { "$ref": "#/components/schemas/DependencyStatus" } } } } },
+      "DependencyStatus": { "type": "object", "properties": { "database": { "type": "boolean" }, "redis": { "type": "boolean" } } },
+      "MetricsEnvelope": {
+        "type": "object",
+        "required": ["success", "data"],
+        "properties": {
+          "success": { "const": true },
+          "data": {
+            "type": "object",
+            "properties": {
+              "uptimeSeconds": { "type": "integer" },
+              "requests": {
+                "type": "object",
+                "properties": {
+                  "total": { "type": "integer" },
+                  "errors": { "type": "integer" },
+                  "byStatus": { "type": "object", "additionalProperties": { "type": "integer" } }
+                }
+              },
+              "durationMs": {
+                "type": "object",
+                "description": "Buckets are disjoint ranges: <=50, 51-100, 101-250, 251-500, 501-1000, 1001-2500, 2501-5000, and >5000 milliseconds.",
+                "properties": {
+                  "count": { "type": "integer" },
+                  "sum": { "type": "number" },
+                  "max": { "type": "number" },
+                  "buckets": { "type": "object", "additionalProperties": { "type": "integer" } }
+                }
+              },
+              "dependencies": {
+                "type": "object",
+                "properties": {
+                  "database": { "$ref": "#/components/schemas/DependencyObservation" },
+                  "redis": { "$ref": "#/components/schemas/DependencyObservation" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "DependencyObservation": { "type": "object", "properties": { "status": { "type": "string", "enum": ["unknown", "up", "down"] }, "checkedAt": { "type": ["string", "null"], "format": "date-time" } } },
+      "Notification": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "userId": { "type": "string", "format": "uuid" }, "deliveryId": { "type": ["string", "null"], "format": "uuid" }, "type": { "type": "string", "enum": ["DELIVERY_UPDATE", "SYSTEM", "ACCOUNT"] }, "title": { "type": "string" }, "message": { "type": "string" }, "isRead": { "type": "boolean" }, "readAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" } } },
+      "NotificationSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/Notification" } } },
+      "PaginatedNotificationEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Notification" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
+      "UnreadCountEnvelope": { "type": "object", "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "unreadCount": { "type": "integer" } } } } },
+      "UpdatedCountEnvelope": { "type": "object", "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "updatedCount": { "type": "integer" } } } } },
+      "RegisterRequest": { "type": "object", "required": ["firstName", "lastName", "email", "password"], "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "email": { "type": "string", "format": "email", "maxLength": 255 }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true }, "phone": { "type": "string", "minLength": 7, "maxLength": 30 } } },
+      "LoginRequest": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 1, "maxLength": 128, "writeOnly": true } } },
+      "RefreshTokenRequest": { "type": "object", "required": ["refreshToken"], "properties": { "refreshToken": { "type": "string", "minLength": 1, "writeOnly": true } } },
+      "CreateDeliveryRequest": { "type": "object", "required": ["recipientName", "recipientPhone", "pickupAddress", "deliveryAddress"], "properties": { "customerId": { "type": "string", "format": "uuid", "description": "Required for ADMIN and SUPER_ADMIN callers; customers may only provide their own ID." }, "recipientName": { "type": "string", "minLength": 2, "maxLength": 150 }, "recipientPhone": { "type": "string", "minLength": 5, "maxLength": 30 }, "pickupAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "pickupLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "pickupLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "deliveryAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "deliveryLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "deliveryLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "packageDescription": { "type": "string", "maxLength": 5000 }, "packageWeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000 }, "notes": { "type": "string", "maxLength": 5000 } } },
+      "AssignDriverRequest": { "type": "object", "required": ["driverId"], "properties": { "driverId": { "type": "string", "format": "uuid" } } },
+      "UpdateDeliveryStatusRequest": { "type": "object", "required": ["status"], "properties": { "status": { "type": "string", "enum": ["PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] } } },
+      "DriverLocationRequest": { "type": "object", "required": ["latitude", "longitude"], "properties": { "latitude": { "type": "number", "minimum": -90, "maximum": 90 }, "longitude": { "type": "number", "minimum": -180, "maximum": 180 }, "accuracy": { "type": "number", "exclusiveMinimum": 0 } } },
+      "CreateStaffUserRequest": { "type": "object", "required": ["firstName", "lastName", "email", "password"], "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "email": { "type": "string", "format": "email", "maxLength": 255 }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true }, "phone": { "type": "string", "maxLength": 30 } } },
+      "UpdateDriverRequest": { "type": "object", "minProperties": 1, "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "phone": { "type": "string", "maxLength": 30 } } },
+      "UpdateCustomerRequest": { "type": "object", "minProperties": 1, "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "phone": { "type": ["string", "null"], "maxLength": 30 } } },
+      "UpdateStatusRequest": { "type": "object", "required": ["status"], "properties": { "status": { "$ref": "#/components/schemas/UserStatus" } } }
+    }
+  }
+}

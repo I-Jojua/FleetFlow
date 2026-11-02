@@ -31,6 +31,12 @@ DELIVERED
 CANCELLED
 }
 
+
+enum NotificationType {
+  DELIVERY_UPDATE
+  SYSTEM
+  ACCOUNT
+}
 model User {
 id           String     @id @default(uuid()) @db.Uuid
 firstName    String     @map("first_name") @db.VarChar(100)
@@ -51,6 +57,7 @@ assignedDeliveries Delivery[] @relation("DriverDeliveries")
 deliveryEvents     DeliveryEvent[]
 
 driverLocations DriverLocation[]
+  notifications Notification[]
 
 createdAt DateTime @default(now()) @map("created_at")
 updatedAt DateTime @updatedAt @map("updated_at")
@@ -111,6 +118,7 @@ driver   User? @relation("DriverDeliveries", fields: [driverId], references: [id
 
 events          DeliveryEvent[]
 driverLocations DriverLocation[]
+  notifications Notification[]
 
 createdAt DateTime @default(now()) @map("created_at")
 updatedAt DateTime @updatedAt @map("updated_at")
@@ -158,4 +166,27 @@ delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: S
 @@index([driverId, recordedAt])
 @@index([deliveryId, recordedAt])
 @@map("driver_locations")
+}
+
+
+model Notification {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  deliveryId String?          @map("delivery_id") @db.Uuid
+
+  type       NotificationType
+  title      String           @db.VarChar(150)
+  message    String           @db.Text
+
+  isRead     Boolean          @default(false) @map("is_read")
+  readAt     DateTime?        @map("read_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, isRead, createdAt])
+  @@index([deliveryId])
+  @@map("notifications")
 }
