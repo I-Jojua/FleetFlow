@@ -5,32 +5,46 @@ import type {
   UpdateDriverInput,
   DriverQueryInput,
 } from "./driver.validation";
+import { AuditOutcome, type UserRole } from "../../generated/prisma/client.js";
+import { writeAuditEvent } from "../audit/audit.service.js";
 
-export async function createDriver(data: CreateDriverInput) {
+export async function createDriver(data: CreateDriverInput, actor?: { userId: string; role: UserRole }) {
   const passwordHash = await argon2.hash(data.password, {
     type: argon2.argon2id,
   });
 
-  return prisma.user.create({
-    data: {
-      firstName: data.firstName,
-      lastName: data.lastName,
-      email: data.email,
-      phone: data.phone ?? null,
-      passwordHash,
-      role: "DRIVER",
-      status: "ACTIVE",
-    },
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      phone: true,
-      role: true,
-      status: true,
-      createdAt: true,
-    },
+  return prisma.$transaction(async (tx) => {
+    const driver = await tx.user.create({
+      data: {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        phone: data.phone ?? null,
+        passwordHash,
+        role: "DRIVER",
+        status: "ACTIVE",
+      },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        role: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+    await writeAuditEvent(tx, {
+      actor,
+      action: "drivers.create",
+      resourceType: "driver",
+      resourceId: driver.id,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { newRole: "DRIVER", newStatus: "ACTIVE" },
+      captureIpAddress: true,
+    });
+    return driver;
   });
 }
 
@@ -128,39 +142,49 @@ export async function getDriverById(id: string) {
   });
 }
 
-export async function updateDriver(id: string, data: UpdateDriverInput) {
-  const driver = await prisma.user.findFirst({
-    where: { id, role: "DRIVER" },
-    select: { id: true },
-  });
+export async function updateDriver(id: string, data: UpdateDriverInput, actor?: { userId: string; role: UserRole }) {
+  return prisma.$transaction(async (tx) => {
+    const driver = await tx.user.findFirst({
+      where: { id, role: "DRIVER" },
+      select: { id: true },
+    });
+    if (!driver) throw new Error("DRIVER_NOT_FOUND");
 
-  if (!driver) {
-    throw new Error("DRIVER_NOT_FOUND");
-  }
-
-  return prisma.user.update({
-    where: { id },
-    data,
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      email: true,
-      phone: true,
-      status: true,
-      updatedAt: true,
-    },
+    const updated = await tx.user.update({
+      where: { id },
+      data,
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        status: true,
+        updatedAt: true,
+      },
+    });
+    await writeAuditEvent(tx, {
+      actor,
+      action: "drivers.update",
+      resourceType: "driver",
+      resourceId: id,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { changedFields: Object.keys(data) },
+      captureIpAddress: true,
+    });
+    return updated;
   });
 }
 
 export async function updateDriverStatus(
   id: string,
   status: "ACTIVE" | "INACTIVE" | "SUSPENDED" | "PENDING_VERIFICATION",
+  actor?: { userId: string; role: UserRole },
 ) {
   return prisma.$transaction(async (tx) => {
     const driver = await tx.user.findFirst({
       where: { id, role: "DRIVER" },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (!driver) {
@@ -180,7 +204,7 @@ export async function updateDriverStatus(
       }
     }
 
-    return tx.user.update({
+    const updated = await tx.user.update({
       where: { id },
       data: { status },
       select: {
@@ -191,6 +215,16 @@ export async function updateDriverStatus(
         status: true,
       },
     });
+    await writeAuditEvent(tx, {
+      actor,
+      action: "drivers.status_update",
+      resourceType: "driver",
+      resourceId: id,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { previousStatus: driver.status, newStatus: updated.status },
+      captureIpAddress: true,
+    });
+    return updated;
   }, { isolationLevel: "Serializable" });
 }
 

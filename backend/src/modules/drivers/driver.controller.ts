@@ -24,7 +24,10 @@ export async function createDriver(
       });
     }
 
-    const driver = await driverService.createDriver(parsed.data);
+    const driver = await driverService.createDriver(parsed.data, {
+      userId: req.user!.id,
+      role: req.user!.role,
+    });
 
     return res.status(201).json({
       success: true,
@@ -112,7 +115,10 @@ export async function updateDriver(
       });
     }
 
-    const driver = await driverService.updateDriver(id, parsed.data);
+    const driver = await driverService.updateDriver(id, parsed.data, {
+      userId: req.user!.id,
+      role: req.user!.role,
+    });
 
     return res.status(200).json({
       success: true,
@@ -146,6 +152,7 @@ export async function updateDriverStatus(
     const driver = await driverService.updateDriverStatus(
       id,
       parsed.data.status,
+      { userId: req.user!.id, role: req.user!.role },
     );
 
     return res.status(200).json({
@@ -178,5 +185,3 @@ export async function getDriverStatistics(
     next(error);
   }
 }
-
-\n

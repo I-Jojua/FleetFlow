@@ -80,12 +80,14 @@ test("OpenAPI documents the current mounted module paths and key authorization b
     "/", "/api/v1/health", "/api/v1/health/ready", "/api/v1/health/metrics",
     "/api/v1/docs", "/api/v1/docs/openapi.json", "/api/v1/docs/swagger-initializer.js",
     "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/auth/me",
+    "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification", "/api/v1/auth/password-reset/request", "/api/v1/auth/password-reset/confirm",
     "/api/v1/deliveries/track/{trackingCode}", "/api/v1/deliveries", "/api/v1/deliveries/my",
     "/api/v1/deliveries/assigned", "/api/v1/deliveries/statistics", "/api/v1/deliveries/{id}/assign",
     "/api/v1/deliveries/{id}", "/api/v1/deliveries/{id}/status", "/api/v1/deliveries/{id}/location", "/api/v1/deliveries/{id}/location/history",
     "/api/v1/drivers", "/api/v1/drivers/{id}", "/api/v1/drivers/{id}/status", "/api/v1/drivers/{id}/statistics",
     "/api/v1/customers", "/api/v1/customers/{id}", "/api/v1/customers/{id}/status", "/api/v1/customers/{id}/statistics",
     "/api/v1/notifications", "/api/v1/notifications/unread-count", "/api/v1/notifications/read-all", "/api/v1/notifications/{id}/read",
+    "/api/v1/audit-logs",
   ];
   for (const path of requiredPaths) assert.ok(paths[path], `Missing documented route ${path}`);
   assert.deepEqual(Object.keys(paths).sort(), requiredPaths.sort(), "OpenAPI paths must match the current mounted API surface");
@@ -94,6 +96,20 @@ test("OpenAPI documents the current mounted module paths and key authorization b
   assert.deepEqual(paths["/api/v1/auth/me"].get.security ?? document.security, [{ BearerAuth: [] }]);
   assert.deepEqual(paths["/api/v1/health/metrics"].get.security, [{ MetricsBearerAuth: [] }]);
   assert.ok(paths["/api/v1/deliveries/{id}/status"].patch["x-required-roles"]);
+  assert.deepEqual(paths["/api/v1/audit-logs"].get["x-required-roles"], ["ADMIN", "SUPER_ADMIN"]);
+});
+
+test("authorization matrix documents each current role and ownership boundary", async () => {
+  const matrix = await readFile(resolve(process.cwd(), "docs/authorization-matrix.md"), "utf8");
+  const openapi = JSON.parse(await readFile(resolve(process.cwd(), "docs/openapi.json"), "utf8"));
+  for (const role of ["CUSTOMER", "DRIVER", "DISPATCHER", "ADMIN", "SUPER_ADMIN"]) {
+    assert.match(matrix, new RegExp(role));
+  }
+  assert.match(matrix, /foreign or nonexistent delivery returns 404/i);
+  assert.match(matrix, /notifications are always queried and updated with both notification ID and the authenticated user's ID/i);
+  assert.match(matrix, /JWT role claims are not authorization inputs/i);
+  assert.match(openapi.paths["/api/v1/deliveries/{id}"].get.description, /ownership-scoped in the database/i);
+  assert.match(openapi.paths["/api/v1/deliveries/{id}/location"].get.description, /out-of-scope or unknown delivery returns 404/i);
 });
 
 test("Swagger access is disabled when configured off and production access needs the configured Basic token", () => {
@@ -185,5 +201,3 @@ test("logger redacts secrets, credentials, personal data, and precise location f
   assert.equal(record.requestId, "safe-request-id");
   assert.doesNotMatch(lines[0], /password-marker|access-marker|refresh-marker|webhook-marker|email-marker|name-marker|phone-marker|address-marker/);
 });
-
-\n

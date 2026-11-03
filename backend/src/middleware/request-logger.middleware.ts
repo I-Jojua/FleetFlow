@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import type { RequestHandler } from "express";
 import { logger } from "../utils/logger.js";
 import { metrics } from "../observability/metrics.js";
@@ -27,5 +28,6 @@ export const requestLogger: RequestHandler = (req, res, next) => {
     });
   });
 
-  runWithRequestContext(requestId, next);
+  const ipAddress = isIP(req.ip ?? "") ? req.ip : undefined;
+  runWithRequestContext(requestId, next, ipAddress);
 };

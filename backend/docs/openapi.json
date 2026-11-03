@@ -3,7 +3,7 @@
   "info": {
     "title": "FleetFlow API",
     "version": "1.0.0",
-    "description": "FleetFlow delivery, customer, driver, tracking, notification, health, and operations API. The access token is a JWT sent as `Authorization: Bearer <accessToken>`. Refresh tokens are opaque values sent in JSON request bodies."
+    "description": "FleetFlow delivery, customer, driver, tracking, notification, health, and operations API. The access token is a JWT sent as `Authorization: Bearer <accessToken>`. Refresh tokens are opaque values sent in JSON request bodies. Authorization roles are loaded from the active database account on every request; see backend/docs/authorization-matrix.md for the route and resource ownership matrix."
   },
   "servers": [
     { "url": "http://localhost:5000", "description": "Local development server" }
@@ -16,6 +16,7 @@
     { "name": "Drivers" },
     { "name": "Customers" },
     { "name": "Notifications" },
+    { "name": "Audit Logs", "description": "Append-only audit records. Read access is restricted to ADMIN and SUPER_ADMIN." },
     { "name": "Operations" }
   ],
   "security": [{ "BearerAuth": [] }],
@@ -115,6 +116,7 @@
         "operationId": "register",
         "tags": ["Authentication"],
         "summary": "Register a customer account",
+        "description": "Creates a PENDING_VERIFICATION customer and queues a verification email. The existing authentication response shape is retained, but tokens cannot be used until the account is verified and active.",
         "security": [],
         "x-required-roles": [],
         "requestBody": { "$ref": "#/components/requestBodies/RegisterRequest" },
@@ -192,6 +194,67 @@
         }
       }
     },
+    "/api/v1/auth/verify-email": {
+      "post": {
+        "operationId": "verifyEmail",
+        "tags": ["Authentication"],
+        "summary": "Verify an email address with a one-time token",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/EmailTokenRequest" },
+        "responses": {
+          "200": { "description": "Email verified and pending account activated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/auth/resend-verification": {
+      "post": {
+        "operationId": "resendEmailVerification",
+        "tags": ["Authentication"],
+        "summary": "Resend an email verification link",
+        "description": "Always returns the same public response for unknown, already verified, or unverified addresses. Replaces older outstanding verification tokens.",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/EmailAddressRequest" },
+        "responses": {
+          "202": { "description": "If verification is needed, an email is queued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/v1/auth/password-reset/request": {
+      "post": {
+        "operationId": "requestPasswordReset",
+        "tags": ["Authentication"],
+        "summary": "Request a password reset link",
+        "description": "Returns the same response whether or not an active account with the email exists. Replaces older outstanding reset tokens.",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/EmailAddressRequest" },
+        "responses": {
+          "202": { "description": "If the account exists, a reset email is queued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/api/v1/auth/password-reset/confirm": {
+      "post": {
+        "operationId": "confirmPasswordReset",
+        "tags": ["Authentication"],
+        "summary": "Set a new password using a one-time reset token",
+        "description": "Consumes the reset token atomically, hashes the new password with Argon2id, and revokes all active refresh-token sessions for the account.",
+        "security": [],
+        "requestBody": { "$ref": "#/components/requestBodies/PasswordResetRequest" },
+        "responses": {
+          "200": { "description": "Password changed and refresh-token sessions revoked.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
     "/api/v1/deliveries/track/{trackingCode}": {
       "get": {
         "operationId": "trackDelivery",
@@ -215,8 +278,9 @@
         "operationId": "createDelivery",
         "tags": ["Deliveries"],
         "summary": "Create a delivery",
-        "description": "Customers create deliveries for their own account. Admin and super-admin callers must provide customerId. The route does not permit dispatchers.",
+        "description": "Customers create deliveries for their own account. Admin and super-admin callers must provide customerId. The route does not permit dispatchers. Idempotency-Key is optional; successful creation is replayed for the same actor, operation, key and payload during the configured retention window.",
         "x-required-roles": ["CUSTOMER", "ADMIN", "SUPER_ADMIN"],
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": false, "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.", "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" } }],
         "requestBody": { "$ref": "#/components/requestBodies/CreateDeliveryRequest" },
         "responses": {
           "201": { "description": "Delivery created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
@@ -295,7 +359,7 @@
         "operationId": "getDelivery",
         "tags": ["Deliveries"],
         "summary": "Get delivery details",
-        "description": "Accessible to staff, the owning customer, or the assigned driver.",
+        "description": "Accessible to staff, the owning customer, or the assigned driver. Customer and driver queries are ownership-scoped in the database; an out-of-scope or unknown delivery returns 404.",
         "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
         "responses": {
           "200": { "description": "Delivery with customer, driver, and event details.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
@@ -312,9 +376,9 @@
         "operationId": "assignDriverToDelivery",
         "tags": ["Deliveries"],
         "summary": "Assign or reassign a driver",
-        "description": "Available for PENDING deliveries and reassignment of ASSIGNED deliveries. Notifies the new and previous driver where applicable.",
+        "description": "Available for PENDING deliveries and reassignment of ASSIGNED deliveries. Notifies the new and previous driver where applicable. Idempotency-Key is optional and supports safe retries for the same actor, operation and payload.",
         "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "parameters": [{ "$ref": "#/components/parameters/UuidId" }, { "name": "Idempotency-Key", "in": "header", "required": false, "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.", "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" } }],
         "requestBody": { "$ref": "#/components/requestBodies/AssignDriverRequest" },
         "responses": {
           "200": { "description": "Updated delivery.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
@@ -332,7 +396,7 @@
         "operationId": "updateDeliveryStatus",
         "tags": ["Deliveries"],
         "summary": "Advance or cancel a delivery",
-        "description": "Transitions: PENDING→CANCELLED; ASSIGNED→PICKED_UP or CANCELLED; PICKED_UP→IN_TRANSIT; IN_TRANSIT→DELIVERED. Staff may update delivery status; drivers may update only their assigned delivery; customers may cancel only their own PENDING delivery.",
+        "description": "Transitions: PENDING→CANCELLED; ASSIGNED→PICKED_UP or CANCELLED; PICKED_UP→IN_TRANSIT; IN_TRANSIT→DELIVERED. Staff may update delivery status; drivers may update only their assigned delivery; customers may cancel only their own PENDING delivery. A customer or driver targeting a delivery outside their ownership scope receives 404.",
         "x-required-roles": ["CUSTOMER", "DRIVER", "ADMIN", "SUPER_ADMIN", "DISPATCHER"],
         "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
         "requestBody": { "$ref": "#/components/requestBodies/UpdateDeliveryStatusRequest" },
@@ -352,7 +416,7 @@
         "operationId": "updateDriverLocation",
         "tags": ["Deliveries"],
         "summary": "Record the authenticated driver's GPS location",
-        "description": "The caller must be the assigned driver and the delivery must be PICKED_UP or IN_TRANSIT.",
+        "description": "The caller must be the assigned driver and the delivery must be PICKED_UP or IN_TRANSIT. An unassigned driver receives 404.",
         "x-required-roles": ["DRIVER"],
         "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
         "requestBody": { "$ref": "#/components/requestBodies/DriverLocationRequest" },
@@ -370,7 +434,7 @@
         "operationId": "getLatestDriverLocation",
         "tags": ["Deliveries"],
         "summary": "Get latest driver location for a delivery",
-        "description": "Accessible to staff, the owning customer, or assigned driver. Data is null when no location has been recorded.",
+        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Data is null when no location has been recorded.",
         "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
         "responses": {
           "200": { "description": "Latest location or null.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NullableLocationEnvelope" } } } },
@@ -387,7 +451,7 @@
         "operationId": "getDriverLocationHistory",
         "tags": ["Deliveries"],
         "summary": "Get paginated driver location history",
-        "description": "Accessible to staff, the owning customer, or assigned driver. Pagination is returned inside data.pagination for this endpoint.",
+        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Pagination is returned inside data.pagination for this endpoint.",
         "parameters": [
           { "$ref": "#/components/parameters/UuidId" },
           { "$ref": "#/components/parameters/Page" },
@@ -671,6 +735,34 @@
           "500": { "$ref": "#/components/responses/InternalError" }
         }
       }
+    },
+    "/api/v1/audit-logs": {
+      "get": {
+        "operationId": "listAuditLogs",
+        "tags": ["Audit Logs"],
+        "summary": "List security and administrative audit records",
+        "description": "Read-only, rate-limited endpoint restricted to ADMIN and SUPER_ADMIN. Records are ordered by createdAt descending then ID descending. Metadata contains only allowlisted values; there are no update, delete, or individual-record endpoints.",
+        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "parameters": [
+          { "$ref": "#/components/parameters/Page" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 } },
+          { "name": "actorUserId", "in": "query", "schema": { "type": "string", "format": "uuid" } },
+          { "name": "action", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,99}$" } },
+          { "name": "resourceType", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,49}$" } },
+          { "name": "resourceId", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 100 } },
+          { "name": "outcome", "in": "query", "schema": { "$ref": "#/components/schemas/AuditOutcome" } },
+          { "name": "from", "in": "query", "description": "Inclusive ISO date-time lower bound.", "schema": { "type": "string", "format": "date-time" } },
+          { "name": "to", "in": "query", "description": "Inclusive ISO date-time upper bound.", "schema": { "type": "string", "format": "date-time" } }
+        ],
+        "responses": {
+          "200": { "description": "Filtered audit records and pagination.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedAuditLogEnvelope" } } } },
+          "400": { "$ref": "#/components/responses/Validation" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
     }
   },
   "components": {
@@ -690,6 +782,9 @@
       "RegisterRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterRequest" } } } },
       "LoginRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } } },
       "RefreshTokenRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshTokenRequest" } } } },
+      "EmailTokenRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EmailTokenRequest" } } } },
+      "EmailAddressRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EmailAddressRequest" } } } },
+      "PasswordResetRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PasswordResetRequest" } } } },
       "CreateDeliveryRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateDeliveryRequest" } } } },
       "AssignDriverRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssignDriverRequest" } } } },
       "UpdateDeliveryStatusRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateDeliveryStatusRequest" } } } },
@@ -718,6 +813,9 @@
       "UserRole": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "DISPATCHER", "DRIVER", "CUSTOMER"] },
       "UserStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"] },
       "DeliveryStatus": { "type": "string", "enum": ["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] },
+      "AuditOutcome": { "type": "string", "enum": ["SUCCESS", "FAILURE", "DENIED"] },
+      "AuditLog": { "type": "object", "required": ["id", "action", "resourceType", "outcome", "createdAt"], "properties": { "id": { "type": "string", "format": "uuid" }, "actorUserId": { "type": ["string", "null"], "format": "uuid" }, "actorRole": { "oneOf": [{ "$ref": "#/components/schemas/UserRole" }, { "type": "null" }] }, "action": { "type": "string" }, "resourceType": { "type": "string" }, "resourceId": { "type": ["string", "null"] }, "outcome": { "$ref": "#/components/schemas/AuditOutcome" }, "requestId": { "type": ["string", "null"] }, "ipAddress": { "type": ["string", "null"], "description": "Validated IPv4 or IPv6 address." }, "metadata": { "type": ["object", "null"], "additionalProperties": false, "properties": { "reason": { "type": "string" }, "previousRole": { "type": "string" }, "newRole": { "type": "string" }, "previousStatus": { "type": "string" }, "newStatus": { "type": "string" }, "fromStatus": { "type": "string" }, "toStatus": { "type": "string" }, "status": { "type": "string" }, "changedFields": { "type": "array", "items": { "type": "string" } }, "sessionRevoked": { "type": "boolean" } } }, "createdAt": { "type": "string", "format": "date-time" } } },
+      "PaginatedAuditLogEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/AuditLog" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
       "AuthUser": { "type": "object", "required": ["id", "firstName", "lastName", "email", "phone", "role", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "firstName": { "type": "string" }, "lastName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": ["string", "null"] }, "role": { "$ref": "#/components/schemas/UserRole" }, "status": { "$ref": "#/components/schemas/UserStatus" } } },
       "Tokens": { "type": "object", "required": ["accessToken", "refreshToken", "tokenType", "expiresIn"], "properties": { "accessToken": { "type": "string" }, "refreshToken": { "type": "string" }, "tokenType": { "const": "Bearer" }, "expiresIn": { "type": "integer", "description": "Access token lifetime in seconds." } } },
       "AuthSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "required": ["user", "tokens"], "properties": { "user": { "$ref": "#/components/schemas/AuthUser" }, "tokens": { "$ref": "#/components/schemas/Tokens" } } } } },
@@ -785,6 +883,9 @@
       "RegisterRequest": { "type": "object", "required": ["firstName", "lastName", "email", "password"], "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "email": { "type": "string", "format": "email", "maxLength": 255 }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true }, "phone": { "type": "string", "minLength": 7, "maxLength": 30 } } },
       "LoginRequest": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 1, "maxLength": 128, "writeOnly": true } } },
       "RefreshTokenRequest": { "type": "object", "required": ["refreshToken"], "properties": { "refreshToken": { "type": "string", "minLength": 1, "writeOnly": true } } },
+      "EmailTokenRequest": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string", "minLength": 20, "maxLength": 256, "writeOnly": true } } },
+      "EmailAddressRequest": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email", "maxLength": 255 } } },
+      "PasswordResetRequest": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string", "minLength": 20, "maxLength": 256, "writeOnly": true }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true } } },
       "CreateDeliveryRequest": { "type": "object", "required": ["recipientName", "recipientPhone", "pickupAddress", "deliveryAddress"], "properties": { "customerId": { "type": "string", "format": "uuid", "description": "Required for ADMIN and SUPER_ADMIN callers; customers may only provide their own ID." }, "recipientName": { "type": "string", "minLength": 2, "maxLength": 150 }, "recipientPhone": { "type": "string", "minLength": 5, "maxLength": 30 }, "pickupAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "pickupLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "pickupLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "deliveryAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "deliveryLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "deliveryLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "packageDescription": { "type": "string", "maxLength": 5000 }, "packageWeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000 }, "notes": { "type": "string", "maxLength": 5000 } } },
       "AssignDriverRequest": { "type": "object", "required": ["driverId"], "properties": { "driverId": { "type": "string", "format": "uuid" } } },
       "UpdateDeliveryStatusRequest": { "type": "object", "required": ["status"], "properties": { "status": { "type": "string", "enum": ["PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] } } },

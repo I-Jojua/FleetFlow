@@ -5,6 +5,8 @@ import { test } from "node:test";
 import type { Request, Response } from "express";
 
 import { validateEnvironment } from "../src/config/env.js";
+import { registerSchema } from "../src/modules/auth/auth.validation.js";
+import { isStaffRole } from "../src/modules/auth/authorization.js";
 import { prisma } from "../src/config/prisma.js";
 import { errorHandler } from "../src/middleware/error.middleware.js";
 import {
@@ -115,14 +117,20 @@ test("production configuration rejects missing database URL and default JWT secr
 });
 
 test("production configuration accepts explicit PostgreSQL URL and distinct long JWT secrets", () => {
-  const config = validateEnvironment({
+  const productionSettings = {
     NODE_ENV: "production",
     DATABASE_URL: "postgresql://fleetflow:example-password@db.example.test:5432/fleetflow",
     REDIS_URL: "rediss://fleetflow:example-password@cache.example.test:6379",
     CORS_ALLOWED_ORIGINS: "https://app.example.test,https://admin.example.test",
+    EMAIL_PROVIDER: "resend",
+    EMAIL_API_KEY: "test-email-api-key",
+    EMAIL_FROM: "no-reply@example.test",
+    APP_BASE_URL: "https://app.example.test",
+    EMAIL_TOKEN_ENCRYPTION_KEY: "c".repeat(64),
     JWT_ACCESS_SECRET: "a".repeat(48),
     JWT_REFRESH_SECRET: "b".repeat(48),
-  });
+  };
+  const config = validateEnvironment(productionSettings);
 
   assert.equal(config.NODE_ENV, "production");
   assert.equal(config.PORT, 5000);
@@ -131,6 +139,10 @@ test("production configuration accepts explicit PostgreSQL URL and distinct long
     "https://app.example.test",
     "https://admin.example.test",
   ]);
+  assert.throws(
+    () => validateEnvironment({ ...productionSettings, APP_BASE_URL: "http://app.example.test" }),
+    /APP_BASE_URL/,
+  );
 });
 
 test("Swagger UI is enabled by default outside production and production access requires a token", () => {
@@ -142,6 +154,11 @@ test("Swagger UI is enabled by default outside production and production access 
     DATABASE_URL: "postgresql://fleetflow:example-password@db.example.test:5432/fleetflow",
     REDIS_URL: "rediss://fleetflow:example-password@cache.example.test:6379",
     CORS_ALLOWED_ORIGINS: "https://app.example.test",
+    EMAIL_PROVIDER: "resend",
+    EMAIL_API_KEY: "test-email-api-key",
+    EMAIL_FROM: "no-reply@example.test",
+    APP_BASE_URL: "https://app.example.test",
+    EMAIL_TOKEN_ENCRYPTION_KEY: "c".repeat(64),
     JWT_ACCESS_SECRET: "a".repeat(48),
     JWT_REFRESH_SECRET: "b".repeat(48),
     API_DOCS_ENABLED: "true",
@@ -166,11 +183,37 @@ test("development defaults remain available and invalid field errors omit secret
   );
 });
 
+test("public registration cannot inject an elevated role or delivery ownership ID", () => {
+  const input = registerSchema.parse({
+    firstName: "Test",
+    lastName: "Customer",
+    email: "test.customer@example.test",
+    password: "safe-test-password",
+    role: "SUPER_ADMIN",
+    customerId: "123e4567-e89b-12d3-a456-426614174000",
+  });
+  assert.equal("role" in input, false);
+  assert.equal("customerId" in input, false);
+});
+
+test("staff resource scope includes only dispatcher and administrator roles", () => {
+  assert.equal(isStaffRole("SUPER_ADMIN"), true);
+  assert.equal(isStaffRole("ADMIN"), true);
+  assert.equal(isStaffRole("DISPATCHER"), true);
+  assert.equal(isStaffRole("DRIVER"), false);
+  assert.equal(isStaffRole("CUSTOMER"), false);
+});
+
 test("rate-limit policies use different endpoint limits", () => {
   assert.equal(RATE_LIMIT_POLICIES.login.maxRequests, 10);
   assert.equal(RATE_LIMIT_POLICIES.register.maxRequests, 5);
   assert.equal(RATE_LIMIT_POLICIES.refresh.maxRequests, 30);
   assert.equal(RATE_LIMIT_POLICIES.publicTracking.maxRequests, 60);
+  assert.equal(RATE_LIMIT_POLICIES.verifyEmail.maxRequests, 10);
+  assert.equal(RATE_LIMIT_POLICIES.resendVerification.maxRequests, 5);
+  assert.equal(RATE_LIMIT_POLICIES.passwordResetRequest.maxRequests, 5);
+  assert.equal(RATE_LIMIT_POLICIES.passwordResetConfirm.maxRequests, 10);
+  assert.equal(RATE_LIMIT_POLICIES.auditRead.maxRequests, 60);
   assert.notEqual(RATE_LIMIT_POLICIES.login.windowMs, RATE_LIMIT_POLICIES.register.windowMs);
 });
 

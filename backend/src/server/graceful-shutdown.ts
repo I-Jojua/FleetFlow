@@ -5,6 +5,7 @@ export interface GracefulShutdownDependencies {
   server: Pick<Server, "close" | "closeAllConnections">;
   timeoutMs: number;
   closeDatabase: () => Promise<unknown>;
+  closeQueues?: () => Promise<unknown>;
   closeRedis: () => Promise<unknown>;
   onExit?: (code: number) => void;
   log?: typeof logger;
@@ -14,6 +15,7 @@ export function createGracefulShutdown({
   server,
   timeoutMs,
   closeDatabase,
+  closeQueues = async () => undefined,
   closeRedis,
   onExit = () => undefined,
   log = logger,
@@ -49,6 +51,7 @@ export function createGracefulShutdown({
       if (timer) clearTimeout(timer);
       const dependencies = await Promise.allSettled([
         closeDatabase(),
+        closeQueues(),
         closeRedis(),
       ]);
       const dependenciesClosed = dependencies.every((result) => result.status === "fulfilled");
@@ -57,7 +60,8 @@ export function createGracefulShutdown({
       if (!dependenciesClosed) {
         log.warn("shutdown_dependency_close_failed", {
           database: dependencies[0].status,
-          redis: dependencies[1].status,
+          queues: dependencies[1].status,
+          redis: dependencies[2].status,
         });
       }
       log.info("shutdown_completed", { signal, timedOut, exitCode });

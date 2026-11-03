@@ -1,9 +1,13 @@
 
 import { randomBytes } from "node:crypto";
-import type { UserRole } from "../../generated/prisma/client";
+import { AuditOutcome, type Prisma, type UserRole } from "../../generated/prisma/client.js";
 import { prisma } from "../../config/prisma";
+import { env } from "../../config/env.js";
+import { writeAuditEvent } from "../audit/audit.service.js";
 import { createNotificationsBestEffort } from "../notifications/notification.service";
 import { sendSlackAlertBestEffort } from "../notifications/slack.service";
+import { isStaffRole } from "../auth/authorization.js";
+import { runIdempotently } from "../idempotency/idempotency.service.js";
 import type {
   CreateDeliveryInput,
 } from "./delivery.validation";
@@ -16,8 +20,10 @@ export async function createDelivery(
   customerId: string,
   data: CreateDeliveryInput,
   actorId = customerId,
+  actorRole?: UserRole,
+  idempotencyKey?: string,
 ) {
-  const delivery = await prisma.$transaction(async (tx) => {
+  const execute = async (tx: Prisma.TransactionClient) => {
     const customer = await tx.user.findFirst({
       where: {
         id: customerId,
@@ -58,22 +64,61 @@ export async function createDelivery(
       },
     });
 
-    return delivery;
-  });
+    const roleSnapshot = actorRole ?? (actorId === customerId ? "CUSTOMER" : undefined);
+    await writeAuditEvent(tx, {
+      actor: roleSnapshot ? { userId: actorId, role: roleSnapshot } : null,
+      action: "deliveries.create",
+      resourceType: "delivery",
+      resourceId: delivery.id,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { newStatus: delivery.status },
+      captureIpAddress: roleSnapshot !== "CUSTOMER",
+    });
 
-  await Promise.all([
-    createNotificationsBestEffort([{
-      userId: customerId,
-      deliveryId: delivery.id,
-      type: "DELIVERY_UPDATE",
-      title: "Delivery created",
-      message: `Your delivery ${delivery.trackingCode} has been created.`,
-    }]),
-    sendSlackAlertBestEffort(
-      "delivery_created",
-      `New delivery created: ${delivery.trackingCode}`,
-    ),
-  ]);
+    return delivery;
+  };
+
+  let delivery: Awaited<ReturnType<typeof execute>>;
+  let replayed = false;
+  if (idempotencyKey) {
+    const result = await prisma.$transaction((tx) => runIdempotently(
+      tx,
+      {
+        actorId,
+        operation: "deliveries.create",
+        key: idempotencyKey,
+        request: { customerId, data },
+        ttlHours: env.IDEMPOTENCY_KEY_TTL_HOURS,
+      },
+      async (transaction) => {
+        const created = await execute(transaction);
+        return { result: created, resourceType: "delivery", resourceId: created.id, statusCode: 201 };
+      },
+      (transaction, resourceType, resourceId) => resourceType === "delivery"
+        ? transaction.delivery.findUnique({ where: { id: resourceId } })
+        : Promise.resolve(null),
+    ));
+    delivery = result.result;
+    replayed = result.replayed;
+  } else {
+    delivery = await prisma.$transaction(execute);
+  }
+
+  if (!replayed) {
+    await Promise.all([
+      createNotificationsBestEffort([{
+        userId: customerId,
+        deliveryId: delivery.id,
+        type: "DELIVERY_UPDATE",
+        title: "Delivery created",
+        message: `Your delivery ${delivery.trackingCode} has been created.`,
+      }]),
+      sendSlackAlertBestEffort(
+        "delivery_created",
+        `New delivery created: ${delivery.trackingCode}`,
+      ),
+    ]);
+  }
 
   return delivery;
 }
@@ -118,17 +163,47 @@ export async function getDeliveryById(id: string) {
   });
 }
 
+/** Resolve delivery details only within the authenticated caller's scope. */
+export async function getDeliveryByIdForActor(
+  id: string,
+  actor: { id: string; role: UserRole },
+) {
+  const scope = isStaffRole(actor.role)
+    ? {}
+    : actor.role === "CUSTOMER"
+      ? { customerId: actor.id }
+      : actor.role === "DRIVER"
+        ? { driverId: actor.id }
+        : null;
+
+  if (scope === null) return null;
+
+  return prisma.delivery.findFirst({
+    where: { id, ...scope },
+    include: {
+      customer: {
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      },
+      driver: {
+        select: { id: true, firstName: true, lastName: true, phone: true },
+      },
+      events: { orderBy: { createdAt: "desc" } },
+    },
+  });
+}
+
 export async function assignDriver(
   deliveryId: string,
   driverId: string,
   actorId: string,
   actorRole: UserRole,
+  idempotencyKey?: string,
 ) {
-  if (!["ADMIN", "SUPER_ADMIN", "DISPATCHER"].includes(actorRole)) {
+  if (!isStaffRole(actorRole)) {
     throw new Error("DELIVERY_FORBIDDEN");
   }
 
-  const result = await prisma.$transaction(async (tx) => {
+  const execute = async (tx: Prisma.TransactionClient) => {
     const delivery = await tx.delivery.findUnique({
       where: { id: deliveryId },
     });
@@ -201,6 +276,16 @@ export async function assignDriver(
       },
     });
 
+    await writeAuditEvent(tx, {
+      actor: { userId: actorId, role: actorRole },
+      action: "deliveries.assign_driver",
+      resourceType: "delivery",
+      resourceId: deliveryId,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { changedFields: ["driverId", "status"] },
+      captureIpAddress: true,
+    });
+
     return {
       delivery: updated,
       customerId: delivery.customerId,
@@ -212,9 +297,39 @@ export async function assignDriver(
       trackingCode: delivery.trackingCode,
       changed: true,
     };
-  }, { isolationLevel: "Serializable" });
+  };
+  const transactionResult = idempotencyKey
+    ? await prisma.$transaction((tx) => runIdempotently(
+        tx,
+        {
+          actorId,
+          operation: "deliveries.assign_driver",
+          key: idempotencyKey,
+          request: { deliveryId, driverId },
+          ttlHours: env.IDEMPOTENCY_KEY_TTL_HOURS,
+        },
+        async (transaction) => {
+          const result = await execute(transaction);
+          return {
+            result,
+            resourceType: "delivery",
+            resourceId: deliveryId,
+            statusCode: 200,
+          };
+        },
+        async (transaction, resourceType, resourceId) => resourceType === "delivery"
+          ? await transaction.delivery.findUnique({ where: { id: resourceId } }).then((delivery) => delivery
+              ? { delivery, customerId: delivery.customerId, driverId: delivery.driverId ?? "", previousDriverId: null, trackingCode: delivery.trackingCode, changed: false }
+              : null)
+          : null,
+      ), { isolationLevel: "Serializable" })
+    : {
+        result: await prisma.$transaction(execute, { isolationLevel: "Serializable" }),
+        replayed: false,
+      };
+  const result = transactionResult.result;
 
-  if (!result.changed) return result.delivery;
+  if (transactionResult.replayed || !result.changed) return result.delivery;
 
   const assignmentNotifications = [
     {
@@ -291,8 +406,13 @@ export async function updateDeliveryStatus(
       throw new Error("DELIVERY_NOT_FOUND");
     }
 
-    const staffRoles: UserRole[] = ["ADMIN", "SUPER_ADMIN", "DISPATCHER"];
-    const isStaff = staffRoles.includes(actor.role);
+    const isStaff = isStaffRole(actor.role);
+    if (actor.role === "CUSTOMER" && delivery.customerId !== actor.id) {
+      throw new Error("DELIVERY_NOT_FOUND");
+    }
+    if (actor.role === "DRIVER" && delivery.driverId !== actor.id) {
+      throw new Error("DELIVERY_NOT_FOUND");
+    }
     const isAssignedDriver =
       actor.role === "DRIVER" && delivery.driverId === actor.id;
     const isCustomerCancellingOwnPendingDelivery =
@@ -352,6 +472,16 @@ export async function updateDeliveryStatus(
         status: newStatus,
         description: `Delivery status changed to ${newStatus}`,
       },
+    });
+
+    await writeAuditEvent(tx, {
+      actor: { userId: actor.id, role: actor.role },
+      action: newStatus === "CANCELLED" ? "deliveries.cancel" : "deliveries.status_update",
+      resourceType: "delivery",
+      resourceId: deliveryId,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { fromStatus: delivery.status, toStatus: newStatus },
+      captureIpAddress: actor.role !== "CUSTOMER",
     });
 
     return {
@@ -583,7 +713,7 @@ export const updateDriverLocation = async (
   }
 
   if (delivery.driverId !== driverId) {
-    throw new Error("DRIVER_NOT_ASSIGNED");
+    throw new Error("DELIVERY_NOT_FOUND");
   }
 
   if (!["PICKED_UP", "IN_TRANSIT"].includes(delivery.status)) {

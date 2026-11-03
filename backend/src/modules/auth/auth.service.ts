@@ -17,7 +17,9 @@ import type {
   LoginInput,
 } from "./auth.validation.js";
 
-import { UserStatus } from "../../generated/prisma/client.js";
+import { AuditOutcome, UserStatus, type Prisma } from "../../generated/prisma/client.js";
+import { stageVerificationForNewUser } from "./auth-recovery.service.js";
+import { recordAuditEvent, writeAuditEvent } from "../audit/audit.service.js";
 
 const ACCESS_TOKEN_TTL = 15 * 60;
 const REFRESH_TOKEN_TTL_DAYS = 7;
@@ -74,12 +76,13 @@ const issueTokens = async (
   user: {
     id: string;
     role: string;
-  }
+  },
+  client: Pick<Prisma.TransactionClient, "refreshToken"> = prisma,
 ): Promise<AuthTokens> => {
   const accessToken = createAccessToken(user);
   const refreshToken = createRefreshToken();
 
-  await prisma.refreshToken.create({
+  await client.refreshToken.create({
     data: {
       tokenHash: hashToken(refreshToken),
       userId: user.id,
@@ -124,14 +127,28 @@ export const register = async (
     type: argon2.argon2id,
   });
 
-  const user = await prisma.user.create({
-    data: {
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email: input.email,
-      passwordHash,
-      phone: input.phone,
-    },
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: {
+        firstName: input.firstName,
+        lastName: input.lastName,
+        email: input.email,
+        passwordHash,
+        phone: input.phone,
+        status: UserStatus.PENDING_VERIFICATION,
+      },
+    });
+    await writeAuditEvent(tx, {
+      actor: { userId: created.id, role: created.role },
+      action: "users.create",
+      resourceType: "user",
+      resourceId: created.id,
+      outcome: AuditOutcome.SUCCESS,
+      captureIpAddress: true,
+      metadata: { newRole: created.role, newStatus: created.status },
+    });
+    await stageVerificationForNewUser(tx, { id: created.id, email: created.email });
+    return created;
   });
 
   const tokens = await issueTokens(user);
@@ -152,6 +169,13 @@ export const login = async (
   });
 
   if (!user) {
+    await recordAuditEvent({
+      action: "auth.login",
+      resourceType: "auth_session",
+      outcome: AuditOutcome.FAILURE,
+      metadata: { reason: "unknown_user" },
+      captureIpAddress: true,
+    });
     throw new AuthError("Invalid email or password.", 401);
   }
 
@@ -161,23 +185,41 @@ export const login = async (
   );
 
   if (!passwordMatches) {
+    await recordAuditEvent({
+      action: "auth.login",
+      resourceType: "user",
+      resourceId: user.id,
+      outcome: AuditOutcome.FAILURE,
+      metadata: { reason: "invalid_credentials" },
+      captureIpAddress: true,
+    });
     throw new AuthError("Invalid email or password.", 401);
   }
 
   if (user.status !== UserStatus.ACTIVE) {
+    await recordAuditEvent({
+      action: "auth.login",
+      resourceType: "user",
+      resourceId: user.id,
+      outcome: AuditOutcome.DENIED,
+      metadata: { reason: "account_inactive" },
+      captureIpAddress: true,
+    });
     throw new AuthError("This account is not active.", 403);
   }
 
-  await prisma.user.update({
-    where: {
-      id: user.id,
-    },
-    data: {
-      lastLoginAt: new Date(),
-    },
+  const tokens = await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    const issued = await issueTokens(user, tx);
+    await writeAuditEvent(tx, {
+      actor: { userId: user.id, role: user.role },
+      action: "auth.login",
+      resourceType: "auth_session",
+      outcome: AuditOutcome.SUCCESS,
+      captureIpAddress: true,
+    });
+    return issued;
   });
-
-  const tokens = await issueTokens(user);
 
   return {
     user: sanitizeUser(user),
@@ -272,14 +314,26 @@ export const refresh = async (refreshToken: string) => {
 };
 
 export const logout = async (refreshToken: string) => {
-  await prisma.refreshToken.updateMany({
-    where: {
-      tokenHash: hashToken(refreshToken),
-      revokedAt: null,
-    },
-    data: {
-      revokedAt: new Date(),
-    },
+  await prisma.$transaction(async (tx) => {
+    const token = await tx.refreshToken.findUnique({
+      where: { tokenHash: hashToken(refreshToken) },
+      select: { id: true, userId: true, user: { select: { role: true } } },
+    });
+    const revoked = await tx.refreshToken.updateMany({
+      where: { tokenHash: hashToken(refreshToken), revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+    if (token && revoked.count === 1) {
+      await writeAuditEvent(tx, {
+        actor: { userId: token.userId, role: token.user.role },
+        action: "auth.logout",
+        resourceType: "auth_session",
+        resourceId: token.id,
+        outcome: AuditOutcome.SUCCESS,
+        metadata: { sessionRevoked: true },
+        captureIpAddress: true,
+      });
+    }
   });
 
   return {

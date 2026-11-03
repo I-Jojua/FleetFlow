@@ -20,7 +20,10 @@ export async function createCustomer(req: Request, res: Response, next: NextFunc
       });
     }
 
-    const customer = await customerService.createCustomer(parsed.data);
+    const customer = await customerService.createCustomer(parsed.data, {
+      userId: req.user!.id,
+      role: req.user!.role,
+    });
 
     return res.status(201).json({
       success: true,
@@ -93,7 +96,10 @@ export async function updateCustomer(req: Request, res: Response, next: NextFunc
       });
     }
 
-    const customer = await customerService.updateCustomer(id, parsed.data);
+    const customer = await customerService.updateCustomer(id, parsed.data, {
+      userId: req.user!.id,
+      role: req.user!.role,
+    });
 
     return res.status(200).json({
       success: true,
@@ -120,7 +126,10 @@ export async function updateCustomerStatus(req: Request, res: Response, next: Ne
       });
     }
 
-    const customer = await customerService.updateCustomerStatus(id, parsed.data.status);
+    const customer = await customerService.updateCustomerStatus(id, parsed.data.status, {
+      userId: req.user!.id,
+      role: req.user!.role,
+    });
 
     return res.status(200).json({
       success: true,

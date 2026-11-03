@@ -42,7 +42,9 @@ function mockTransaction(
     options?: { isolationLevel?: string },
   ) => {
     if (capture) capture.options = options;
-    return callback(transactionClient);
+    const tx = transactionClient as Record<string, any>;
+    tx.auditLog ??= { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) };
+    return callback(tx);
   });
 }
 
@@ -482,7 +484,7 @@ test("customer cannot cancel another customer's delivery", async (t) => {
       { id: customerId, role: "CUSTOMER" },
       "CANCELLED",
     ),
-    { message: "DELIVERY_FORBIDDEN" },
+    { message: "DELIVERY_NOT_FOUND" },
   );
 });
 
@@ -532,6 +534,7 @@ test("driver can be deactivated when no active deliveries remain", async (t) => 
   ) => {
     transactionOptions = options;
     return callback({
+      auditLog: { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) },
       user: {
         findFirst: async () => ({ id: driverId }),
         update: async () => ({ id: driverId, status: "INACTIVE" }),

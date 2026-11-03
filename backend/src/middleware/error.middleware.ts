@@ -70,13 +70,23 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, next) => {
     return;
   }
 
+  if (code === "IDEMPOTENCY_KEY_REUSED") {
+    res.status(409).json({
+      success: false,
+      code,
+      message: "This Idempotency-Key was already used with a different request.",
+    });
+    return;
+  }
+
   if (
     code === "P2003" ||
     code === "P2034" ||
     code === "INVALID_STATUS_TRANSITION" ||
     code === "DELIVERY_STATE_CONFLICT" ||
     code === "DELIVERY_CANNOT_BE_ASSIGNED" ||
-    code === "DRIVER_HAS_ACTIVE_DELIVERIES"
+    code === "DRIVER_HAS_ACTIVE_DELIVERIES" ||
+    code === "IDEMPOTENCY_RESULT_NOT_FOUND"
   ) {
     res.status(409).json({
       success: false,
@@ -114,8 +124,11 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, next) => {
     return;
   }
 
+  const diagnosticCode = code && /^P\d{4}$/.test(code) ? code : undefined;
   logger.error("api_request_failed", {
     requestId: typeof res.locals?.requestId === "string" ? res.locals.requestId : undefined,
+    errorType: error instanceof Error ? error.name : "UnknownError",
+    ...(diagnosticCode ? { databaseCode: diagnosticCode } : {}),
   });
   res.status(500).json({
     success: false,

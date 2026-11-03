@@ -191,15 +191,26 @@ export const RATE_LIMIT_POLICIES = {
   login: { key: "login", windowMs: 15 * 60 * 1000, maxRequests: 10 },
   register: { key: "register", windowMs: 60 * 60 * 1000, maxRequests: 5 },
   refresh: { key: "refresh", windowMs: 15 * 60 * 1000, maxRequests: 30 },
+  verifyEmail: { key: "verify-email", windowMs: 15 * 60 * 1000, maxRequests: 10 },
+  resendVerification: { key: "resend-verification", windowMs: 60 * 60 * 1000, maxRequests: 5 },
+  passwordResetRequest: { key: "password-reset-request", windowMs: 60 * 60 * 1000, maxRequests: 5 },
+  passwordResetConfirm: { key: "password-reset-confirm", windowMs: 15 * 60 * 1000, maxRequests: 10 },
   publicTracking: { key: "public-tracking", windowMs: 15 * 60 * 1000, maxRequests: 60 },
+  auditRead: { key: "audit-read", windowMs: 60 * 1000, maxRequests: 60 },
 } as const;
 
 export const authRateLimiters = {
   login: createRateLimiter(RATE_LIMIT_POLICIES.login),
   register: createRateLimiter(RATE_LIMIT_POLICIES.register),
   refresh: createRateLimiter(RATE_LIMIT_POLICIES.refresh),
+  verifyEmail: createRateLimiter(RATE_LIMIT_POLICIES.verifyEmail),
+  resendVerification: createRateLimiter(RATE_LIMIT_POLICIES.resendVerification),
+  passwordResetRequest: createRateLimiter(RATE_LIMIT_POLICIES.passwordResetRequest),
+  passwordResetConfirm: createRateLimiter(RATE_LIMIT_POLICIES.passwordResetConfirm),
 };
 
 export const publicTrackingRateLimiter = createRateLimiter(
   RATE_LIMIT_POLICIES.publicTracking,
 );
+
+export const auditReadRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.auditRead);

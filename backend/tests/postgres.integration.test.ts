@@ -233,7 +233,7 @@ test("customer ownership and pending cancellation restrictions are enforced by P
 
   await assert.rejects(
     deliveryService!.updateDeliveryStatus(otherDelivery.id, { id: customer.id, role: "CUSTOMER" }, "CANCELLED"),
-    { message: "DELIVERY_FORBIDDEN" },
+    { message: "DELIVERY_NOT_FOUND" },
   );
   await deliveryService!.updateDeliveryStatus(ownDelivery.id, { id: customer.id, role: "CUSTOMER" }, "CANCELLED");
 

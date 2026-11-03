@@ -9,17 +9,27 @@ import {
   locationHistoryQuerySchema,
 } from "./delivery.validation.js";
 import { validateUuidParam } from "../../middleware/request-validation.js";
+import { isStaffRole } from "../auth/authorization.js";
+import { validateIdempotencyKey } from "../idempotency/idempotency.service.js";
 
 // --- დამხმარე ფუნქციები (Helpers) ---
 
-const STAFF_ROLES = ["SUPER_ADMIN", "ADMIN", "DISPATCHER"];
-
-function isStaffMember(role: string): boolean {
-  return STAFF_ROLES.includes(role);
-}
-
 function validateDeliveryId(req: Request, res: Response): string | null {
   return validateUuidParam(req, res, "Delivery");
+}
+
+function readIdempotencyKey(req: Request, res: Response): string | undefined | null {
+  const key = typeof req.get === "function" ? req.get("Idempotency-Key") : undefined;
+  if (key === undefined) return undefined;
+  if (!validateIdempotencyKey(key)) {
+    res.status(400).json({
+      success: false,
+      code: "INVALID_IDEMPOTENCY_KEY",
+      message: "Idempotency-Key must be 8–128 characters using letters, digits, dot, underscore, colon, or dash.",
+    });
+    return null;
+  }
+  return key;
 }
 
 // --- კონტროლერები ---
@@ -30,9 +40,11 @@ export async function createDelivery(
   next: NextFunction,
 ) {
   try {
+    const idempotencyKey = readIdempotencyKey(req, res);
+    if (idempotencyKey === null) return;
     const data = createDeliverySchema.parse(req.body);
     const user = req.user!;
-    const isStaff = isStaffMember(user.role);
+    const isStaff = isStaffRole(user.role);
 
     if (!isStaff && user.role !== "CUSTOMER") {
       return res.status(403).json({
@@ -60,7 +72,7 @@ export async function createDelivery(
 
     const customerId = user.role === "CUSTOMER" ? user.id : data.customerId!;
 
-    const delivery = await deliveryService.createDelivery(customerId, data, user.id);
+    const delivery = await deliveryService.createDelivery(customerId, data, user.id, user.role, idempotencyKey);
 
     return res.status(201).json({
       success: true,
@@ -100,25 +112,12 @@ export async function getDelivery(
     const deliveryId = validateDeliveryId(req, res);
     if (!deliveryId) return;
 
-    const delivery = await deliveryService.getDeliveryById(deliveryId);
+    const delivery = await deliveryService.getDeliveryByIdForActor(deliveryId, req.user!);
 
     if (!delivery) {
       return res.status(404).json({
         success: false,
         message: "Delivery not found",
-      });
-    }
-
-    const user = req.user!;
-    const hasAccess =
-      isStaffMember(user.role) ||
-      delivery.customerId === user.id ||
-      delivery.driverId === user.id;
-
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied",
       });
     }
 
@@ -140,7 +139,10 @@ export async function assignDriver(
     const deliveryId = validateDeliveryId(req, res);
     if (!deliveryId) return;
 
-    if (!isStaffMember(req.user!.role)) {
+    const idempotencyKey = readIdempotencyKey(req, res);
+    if (idempotencyKey === null) return;
+
+    if (!isStaffRole(req.user!.role)) {
       return res.status(403).json({
         success: false,
         code: "FORBIDDEN",
@@ -155,6 +157,7 @@ export async function assignDriver(
       driverId,
       req.user!.id,
       req.user!.role,
+      idempotencyKey,
     );
 
     return res.status(200).json({
@@ -342,25 +345,12 @@ export async function getDriverLocation(
     const deliveryId = validateDeliveryId(req, res);
     if (!deliveryId) return;
 
-    const user = req.user!;
-    const delivery = await deliveryService.getDeliveryById(deliveryId);
+    const delivery = await deliveryService.getDeliveryByIdForActor(deliveryId, req.user!);
 
     if (!delivery) {
       return res.status(404).json({
         success: false,
         message: "Delivery not found.",
-      });
-    }
-
-    const hasAccess =
-      isStaffMember(user.role) ||
-      delivery.customerId === user.id ||
-      delivery.driverId === user.id;
-
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: "Access denied.",
       });
     }
 
@@ -401,24 +391,12 @@ export async function getDriverLocationHistory(
     }
     const { page, limit } = parsedPagination.data;
 
-    const delivery = await deliveryService.getDeliveryById(deliveryId);
+    const delivery = await deliveryService.getDeliveryByIdForActor(deliveryId, req.user!);
 
     if (!delivery) {
       return res.status(404).json({
         success: false,
         message: "Delivery not found.",
-      });
-    }
-
-    const user = req.user!;
-    const isStaff = isStaffMember(user.role);
-    const isCustomer = delivery.customerId === user.id;
-    const isAssignedDriver = delivery.driverId === user.id;
-
-    if (!isStaff && !isCustomer && !isAssignedDriver) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not allowed to view this location history.",
       });
     }
 

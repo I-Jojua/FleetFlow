@@ -19,6 +19,10 @@ try {
   $env:JWT_ACCESS_SECRET = "integration_only_access_secret_123456"
   $env:JWT_REFRESH_SECRET = "integration_only_refresh_secret_123456"
   $env:SLACK_WEBHOOK_URL = "https://integration.invalid/slack"
+  $env:EMAIL_PROVIDER = "console"
+  $env:EMAIL_FROM = "integration@example.test"
+  $env:APP_BASE_URL = "http://127.0.0.1:5173"
+  $env:EMAIL_TOKEN_ENCRYPTION_KEY = "0000000000000000000000000000000000000000000000000000000000000000"
 
   docker compose -p $composeProject -f $composeFile up -d --wait postgres-integration redis-integration
   if ($LASTEXITCODE -ne 0) { throw "Could not start isolated integration PostgreSQL." }
@@ -27,7 +31,7 @@ try {
   npx.cmd prisma migrate deploy --config prisma7.config.ts
   if ($LASTEXITCODE -ne 0) { throw "Could not apply existing migrations to isolated integration PostgreSQL." }
 
-  npx.cmd tsx --test tests/postgres.integration.test.ts tests/redis.integration.test.ts
+  npx.cmd tsx --test tests/postgres.integration.test.ts tests/redis.integration.test.ts tests/jobs.integration.test.ts tests/email.integration.test.ts tests/auth-recovery.integration.test.ts tests/audit.integration.test.ts tests/authorization.integration.test.ts tests/transactional-reliability.integration.test.ts
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL integration tests failed." }
 }
 finally {

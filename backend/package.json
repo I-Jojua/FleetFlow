@@ -5,6 +5,9 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "worker": "tsx watch src/worker.ts",
+    "worker:start": "node dist/worker.js",
+    "job:demo": "tsx src/jobs/demo-job.cli.ts",
     "build": "tsc",
     "test": "tsc -p tsconfig.test.json && tsx --test",
     "test:integration": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-integration.ps1",

@@ -1,4 +1,5 @@
 import Redis from "ioredis";
+import type { ConnectionOptions } from "bullmq";
 import { env } from "./env.js";
 import { logger } from "../utils/logger.js";
 
@@ -10,6 +11,21 @@ export const redis = new Redis(env.REDIS_URL, {
   commandTimeout: 1_500,
   retryStrategy: (attempt) => Math.min(attempt * 250, 2_000),
 });
+
+/** BullMQ needs dedicated producer/worker clients with null maxRetriesPerRequest. */
+export function getBullMqRedisConnectionOptions(
+  redisUrl = env.REDIS_URL,
+  overrides: Partial<Extract<ConnectionOptions, { url?: string }>> = {},
+): Extract<ConnectionOptions, { url?: string }> {
+  return {
+    url: redisUrl,
+    maxRetriesPerRequest: null,
+    enableOfflineQueue: true,
+    connectTimeout: 1_000,
+    retryStrategy: (attempt) => Math.min(attempt * 250, 2_000),
+    ...overrides,
+  };
+}
 
 let connectionAttempt: Promise<void> | undefined;
 

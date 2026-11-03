@@ -34,8 +34,11 @@ function mockTransaction(
   t: TestContext,
   transactionClient: object,
 ) {
-  replaceMethod(t, prisma, "$transaction", async (callback: (tx: object) => unknown) =>
-    callback(transactionClient));
+  replaceMethod(t, prisma, "$transaction", async (callback: (tx: object) => unknown) => {
+    const tx = transactionClient as Record<string, any>;
+    tx.auditLog ??= { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) };
+    return callback(tx);
+  });
 }
 
 function replaceMethod(

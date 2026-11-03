@@ -8,6 +8,7 @@ import deliveryRoutes from "./modules/deliveries/delivery.routes.js";
 import driverRoutes from "./modules/drivers/driver.routes.js";
 import customerRoutes from "./modules/customers/customer.routes.js";
 import notificationRoutes from "./modules/notifications/notification.routes.js";
+import auditRoutes from "./modules/audit/audit.routes.js";
 import docsRoutes from "./modules/docs/docs.routes.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.middleware.js";
 import { env } from "./config/env.js";
@@ -50,6 +51,7 @@ app.use("/api/v1/deliveries", deliveryRoutes);
 app.use("/api/v1/drivers", driverRoutes);
 app.use("/api/v1/customers", customerRoutes);
 app.use("/api/v1/notifications", notificationRoutes);
+app.use("/api/v1/audit-logs", auditRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
