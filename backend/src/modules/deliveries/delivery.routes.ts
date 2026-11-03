@@ -2,7 +2,12 @@
 import * as controller from "./delivery.controller";
 import { authenticate } from "./../auth/auth.middleware";
 import { authorizeRoles } from "./../auth/role.middleware";
-import { publicTrackingRateLimiter } from "../../middleware/rate-limit.middleware.js";
+import {
+  publicTrackingRateLimiter,
+  driverLocationUpdateRateLimiter,
+  locationReadRateLimiter,
+  workforceWriteRateLimiter,
+} from "../../middleware/rate-limit.middleware.js";
 
 const router = Router();
 
@@ -58,6 +63,13 @@ router.patch(
   controller.assignDriver,
 );
 
+router.patch(
+  "/:id/requirements",
+  authorizeRoles("ADMIN", "SUPER_ADMIN", "DISPATCHER"),
+  workforceWriteRateLimiter,
+  controller.updateDeliveryRequirements,
+);
+
 // Update delivery status
 router.patch(
   "/:id/status",
@@ -69,18 +81,21 @@ router.patch(
 router.patch(
   "/:id/location",
   authorizeRoles("DRIVER"),
+  driverLocationUpdateRateLimiter,
   controller.updateMyLocation,
 );
 
 // Get driver's latest GPS location
 router.get(
   "/:id/location",
+  locationReadRateLimiter,
   controller.getDriverLocation,
 );
 
 // Get driver's GPS location history
 router.get(
   "/:id/location/history",
+  locationReadRateLimiter,
   controller.getDriverLocationHistory,
 );
 

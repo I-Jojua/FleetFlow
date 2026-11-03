@@ -5,8 +5,10 @@ import {
   updateDriverSchema,
   updateDriverStatusSchema,
   driverQuerySchema,
+  activeDriverLocationsQuerySchema,
 } from "./driver.validation.js";
 import { validateUuidParam } from "../../middleware/request-validation.js";
+import { env } from "../../config/env.js";
 
 export async function createDriver(
   req: Request,
@@ -180,6 +182,43 @@ export async function getDriverStatistics(
       success: true,
       message: "Driver statistics retrieved successfully.",
       data: statistics,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getActiveDriverLocations(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const parsed = activeDriverLocationsQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        success: false,
+        code: "VALIDATION_FAILED",
+        message: "Invalid pagination parameters.",
+      });
+    }
+
+    const result = await driverService.getActiveDriverLocations(parsed.data.page, parsed.data.limit);
+    const now = Date.now();
+    const locations = result.locations.map((location) => {
+      const preciseAgeSeconds = Math.max(0, (now - location.recordedAt.getTime()) / 1_000);
+      return {
+        ...location,
+        ageSeconds: Math.floor(preciseAgeSeconds),
+        isStale: preciseAgeSeconds > env.GPS_STALE_AFTER_SECONDS,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Active driver locations retrieved successfully.",
+      data: locations,
+      pagination: result.pagination,
     });
   } catch (error) {
     next(error);

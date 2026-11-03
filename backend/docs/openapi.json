@@ -5,31 +5,61 @@
     "version": "1.0.0",
     "description": "FleetFlow delivery, customer, driver, tracking, notification, health, and operations API. The access token is a JWT sent as `Authorization: Bearer <accessToken>`. Refresh tokens are opaque values sent in JSON request bodies. Authorization roles are loaded from the active database account on every request; see backend/docs/authorization-matrix.md for the route and resource ownership matrix."
   },
-  "servers": [
-    { "url": "http://localhost:5000", "description": "Local development server" }
-  ],
+  "servers": [{"url":"http://localhost:5000","description":"Local development server"}],
   "tags": [
-    { "name": "Root" },
-    { "name": "Health" },
-    { "name": "Authentication" },
-    { "name": "Deliveries" },
-    { "name": "Drivers" },
-    { "name": "Customers" },
-    { "name": "Notifications" },
-    { "name": "Audit Logs", "description": "Append-only audit records. Read access is restricted to ADMIN and SUPER_ADMIN." },
-    { "name": "Operations" }
+    {"name":"Root"},
+    {"name":"Health"},
+    {"name":"Authentication"},
+    {"name":"Deliveries"},
+    {"name":"Drivers"},
+    {"name":"Vehicles","description":"Vehicle capability, status, and historical driver assignment management."},
+    {"name":"Customers"},
+    {"name":"Notifications"},
+    {"name":"Audit Logs","description":"Append-only audit records. Read access is restricted to ADMIN and SUPER_ADMIN."},
+    {"name":"Operations"},
+    {"name":"Dispatch","description":"Advisory driver recommendations; results never perform assignment."}
   ],
-  "security": [{ "BearerAuth": [] }],
+  "security": [{"BearerAuth":[]}],
+  "x-realtime": {
+    "protocol": "WebSocket",
+    "connection": "ws://localhost:5000/api/v1/realtime/socket?ticket={singleUseTicket}",
+    "ticketEndpoint": "POST /api/v1/realtime/ticket",
+    "ticketDescription": "Requires the normal Bearer access token. Returns a Redis-backed single-use ticket valid for 30 seconds. Do not put bearer tokens in the WebSocket URL.",
+    "clientMessages": ["subscribe_delivery","unsubscribe_delivery","subscribe_active_drivers","unsubscribe_active_drivers"],
+    "deliverySubscription": "ADMIN, SUPER_ADMIN, or DISPATCHER; owning CUSTOMER; or currently assigned DRIVER. Authorization is revalidated before each location broadcast.",
+    "activeDriversSubscription": "ADMIN, SUPER_ADMIN, and DISPATCHER only.",
+    "reconnection": "Reconnect by requesting a new ticket and resending desired subscriptions. Redis Pub/Sub is transient; recover any missed location updates from PostgreSQL-backed REST endpoints.",
+    "operationalLimits": {
+      "maxConnectionsPerProcess": "REALTIME_MAX_CONNECTIONS (default 1000)",
+      "maxConnectionsPerDirectPeerIp": "REALTIME_MAX_CONNECTIONS_PER_IP (default 50)",
+      "maxBufferedBytesPerClient": "REALTIME_MAX_BUFFERED_BYTES (default 1048576); slow clients are closed with WebSocket code 1013",
+      "publishTimeoutMs": "REALTIME_PUBLISH_TIMEOUT_MS (default 750); GPS persistence is independent and clients recover from REST"
+    },
+    "metrics": "The existing bearer-protected /api/v1/health/metrics endpoint includes process-local realtime counters and GPS persistence latency without coordinates or user identifiers."
+  },
   "paths": {
+    "/api/v1/realtime/ticket": {
+      "post": {
+        "operationId": "createRealtimeTicket",
+        "tags": ["Operations"],
+        "summary": "Create a one-use WebSocket connection ticket",
+        "description": "Requires an active authenticated account and is rate-limited to 20 requests per minute. The returned opaque Redis ticket expires after 30 seconds and can be used once in the WebSocket handshake. Never send the bearer access token in the WebSocket URL.",
+        "responses": {
+          "201": {"description":"Single-use ticket created.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/RealtimeTicketEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
+        }
+      }
+    },
     "/": {
       "get": {
         "operationId": "getApiWelcome",
         "tags": ["Root"],
         "summary": "API welcome and version",
         "security": [],
-        "responses": {
-          "200": { "description": "API welcome response.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } }
-        }
+        "responses": {"200":{"description":"API welcome response.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SuccessEnvelope"}}}}}
       }
     },
     "/api/v1/health": {
@@ -39,9 +69,7 @@
         "summary": "Liveness probe",
         "description": "Lightweight process liveness check. Does not verify PostgreSQL or Redis.",
         "security": [],
-        "responses": {
-          "200": { "description": "The process is running.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SuccessEnvelope" } } } }
-        }
+        "responses": {"200":{"description":"The process is running.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/SuccessEnvelope"}}}}}
       }
     },
     "/api/v1/health/ready": {
@@ -52,8 +80,8 @@
         "description": "Checks PostgreSQL and Redis. Returns only dependency availability flags and no connection details.",
         "security": [],
         "responses": {
-          "200": { "description": "Both required dependencies are available.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ReadinessEnvelope" } } } },
-          "503": { "$ref": "#/components/responses/DependencyUnavailable" }
+          "200": {"description":"Both required dependencies are available.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ReadinessEnvelope"}}}},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
         }
       }
     },
@@ -63,11 +91,11 @@
         "tags": ["Operations"],
         "summary": "Read in-process operational metrics",
         "description": "Returns process-local request totals, status counts, duration summary, error count, and last observed dependency availability. Disabled with 404 unless METRICS_ACCESS_TOKEN is configured. Requires its bearer token; this endpoint is not public.",
-        "security": [{ "MetricsBearerAuth": [] }],
+        "security": [{"MetricsBearerAuth":[]}],
         "responses": {
-          "200": { "description": "Metrics snapshot.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MetricsEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "200": {"description":"Metrics snapshot.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MetricsEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "404": {"$ref":"#/components/responses/NotFound"}
         }
       }
     },
@@ -77,11 +105,11 @@
         "tags": ["Operations"],
         "summary": "Interactive Swagger UI",
         "description": "Enabled by default outside production. Production docs are off unless explicitly enabled; when enabled, HTTP Basic username `docs` and API_DOCS_ACCESS_TOKEN as the password are required.",
-        "security": [{ "DocsBasicAuth": [] }],
+        "security": [{"DocsBasicAuth":[]}],
         "responses": {
-          "200": { "description": "Swagger UI HTML page.", "content": { "text/html": { "schema": { "type": "string" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "200": {"description":"Swagger UI HTML page.","content":{"text/html":{"schema":{"type":"string"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "404": {"$ref":"#/components/responses/NotFound"}
         }
       }
     },
@@ -90,11 +118,11 @@
         "operationId": "getOpenApiDocument",
         "tags": ["Operations"],
         "summary": "Download the OpenAPI document",
-        "security": [{ "DocsBasicAuth": [] }],
+        "security": [{"DocsBasicAuth":[]}],
         "responses": {
-          "200": { "description": "OpenAPI 3.1 document.", "content": { "application/json": { "schema": { "type": "object" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "200": {"description":"OpenAPI 3.1 document.","content":{"application/json":{"schema":{"type":"object"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "404": {"$ref":"#/components/responses/NotFound"}
         }
       }
     },
@@ -103,11 +131,11 @@
         "operationId": "getSwaggerInitializer",
         "tags": ["Operations"],
         "summary": "Load Swagger UI configuration",
-        "security": [{ "DocsBasicAuth": [] }],
+        "security": [{"DocsBasicAuth":[]}],
         "responses": {
-          "200": { "description": "Swagger UI initializer script.", "content": { "application/javascript": { "schema": { "type": "string" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "200": {"description":"Swagger UI initializer script.","content":{"application/javascript":{"schema":{"type":"string"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "404": {"$ref":"#/components/responses/NotFound"}
         }
       }
     },
@@ -119,14 +147,14 @@
         "description": "Creates a PENDING_VERIFICATION customer and queues a verification email. The existing authentication response shape is retained, but tokens cannot be used until the account is verified and active.",
         "security": [],
         "x-required-roles": [],
-        "requestBody": { "$ref": "#/components/requestBodies/RegisterRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/RegisterRequest"},
         "responses": {
-          "201": { "description": "Account and token pair created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "409": { "description": "Email or phone is already registered.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "201": {"description":"Account and token pair created.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/AuthSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "409": {"description":"Email or phone is already registered.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageError"}}}},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
         }
       }
     },
@@ -136,15 +164,15 @@
         "tags": ["Authentication"],
         "summary": "Authenticate with email and password",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/LoginRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/LoginRequest"},
         "responses": {
-          "200": { "description": "Authenticated user and token pair.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "description": "Credentials are invalid.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
-          "403": { "description": "Account is not active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Authenticated user and token pair.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/AuthSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"description":"Credentials are invalid.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageError"}}}},
+          "403": {"description":"Account is not active.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageError"}}}},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
         }
       }
     },
@@ -155,15 +183,15 @@
         "summary": "Rotate a refresh token",
         "description": "Refresh-token reuse revokes all active sessions for the user.",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/RefreshTokenRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/RefreshTokenRequest"},
         "responses": {
-          "200": { "description": "New access and refresh tokens.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "description": "Refresh token is invalid, expired, or already used.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
-          "403": { "description": "Account is not active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageError" } } } },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"New access and refresh tokens.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TokenSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"description":"Refresh token is invalid, expired, or already used.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageError"}}}},
+          "403": {"description":"Account is not active.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageError"}}}},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
         }
       }
     },
@@ -174,11 +202,11 @@
         "summary": "Revoke a refresh token",
         "description": "Accepts a refresh token in the request body; route does not require an access token.",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/RefreshTokenRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/RefreshTokenRequest"},
         "responses": {
-          "200": { "description": "Logout response.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Logout response.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -188,9 +216,9 @@
         "tags": ["Authentication"],
         "summary": "Get the authenticated user's profile",
         "responses": {
-          "200": { "description": "Current user profile.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Current user profile.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -200,12 +228,12 @@
         "tags": ["Authentication"],
         "summary": "Verify an email address with a one-time token",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/EmailTokenRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/EmailTokenRequest"},
         "responses": {
-          "200": { "description": "Email verified and pending account activated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Email verified and pending account activated.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -216,11 +244,11 @@
         "summary": "Resend an email verification link",
         "description": "Always returns the same public response for unknown, already verified, or unverified addresses. Replaces older outstanding verification tokens.",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/EmailAddressRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/EmailAddressRequest"},
         "responses": {
-          "202": { "description": "If verification is needed, an email is queued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "429": { "$ref": "#/components/responses/RateLimited" }
+          "202": {"description":"If verification is needed, an email is queued.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "429": {"$ref":"#/components/responses/RateLimited"}
         }
       }
     },
@@ -231,11 +259,11 @@
         "summary": "Request a password reset link",
         "description": "Returns the same response whether or not an active account with the email exists. Replaces older outstanding reset tokens.",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/EmailAddressRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/EmailAddressRequest"},
         "responses": {
-          "202": { "description": "If the account exists, a reset email is queued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "429": { "$ref": "#/components/responses/RateLimited" }
+          "202": {"description":"If the account exists, a reset email is queued.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "429": {"$ref":"#/components/responses/RateLimited"}
         }
       }
     },
@@ -246,12 +274,12 @@
         "summary": "Set a new password using a one-time reset token",
         "description": "Consumes the reset token atomically, hashes the new password with Argon2id, and revokes all active refresh-token sessions for the account.",
         "security": [],
-        "requestBody": { "$ref": "#/components/requestBodies/PasswordResetRequest" },
+        "requestBody": {"$ref":"#/components/requestBodies/PasswordResetRequest"},
         "responses": {
-          "200": { "description": "Password changed and refresh-token sessions revoked.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/MessageSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Password changed and refresh-token sessions revoked.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MessageSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -262,14 +290,14 @@
         "summary": "Public delivery tracking",
         "description": "Returns tracking code, status, lifecycle timestamps, and event status/timestamps. Recipient identity, addresses, and event descriptions are intentionally omitted.",
         "security": [],
-        "parameters": [{ "$ref": "#/components/parameters/TrackingCode" }],
+        "parameters": [{"$ref":"#/components/parameters/TrackingCode"}],
         "responses": {
-          "200": { "description": "Privacy-limited tracking result.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TrackingEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "503": { "$ref": "#/components/responses/DependencyUnavailable" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Privacy-limited tracking result.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/TrackingEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"},
+          "503": {"$ref":"#/components/responses/DependencyUnavailable"}
         }
       }
     },
@@ -279,36 +307,44 @@
         "tags": ["Deliveries"],
         "summary": "Create a delivery",
         "description": "Customers create deliveries for their own account. Admin and super-admin callers must provide customerId. The route does not permit dispatchers. Idempotency-Key is optional; successful creation is replayed for the same actor, operation, key and payload during the configured retention window.",
-        "x-required-roles": ["CUSTOMER", "ADMIN", "SUPER_ADMIN"],
-        "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": false, "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.", "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" } }],
-        "requestBody": { "$ref": "#/components/requestBodies/CreateDeliveryRequest" },
+        "x-required-roles": ["CUSTOMER","ADMIN","SUPER_ADMIN"],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.",
+            "schema": {"type":"string","minLength":8,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]{8,128}$"}
+          }
+        ],
+        "requestBody": {"$ref":"#/components/requestBodies/CreateDeliveryRequest"},
         "responses": {
-          "201": { "description": "Delivery created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "description": "Selected customer was not found or active.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "201": {"description":"Delivery created.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliverySuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"description":"Selected customer was not found or active.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "get": {
         "operationId": "searchDeliveries",
         "tags": ["Deliveries"],
         "summary": "Search and paginate deliveries",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
         "parameters": [
-          { "name": "search", "in": "query", "schema": { "type": "string" } },
-          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/DeliveryStatus" } },
-          { "$ref": "#/components/parameters/Page" },
-          { "$ref": "#/components/parameters/Limit10" }
+          {"name":"search","in":"query","schema":{"type":"string"}},
+          {"name":"status","in":"query","schema":{"$ref":"#/components/schemas/DeliveryStatus"}},
+          {"$ref":"#/components/parameters/Page"},
+          {"$ref":"#/components/parameters/Limit10"}
         ],
         "responses": {
-          "200": { "description": "Matching deliveries and pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedDeliveryEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Matching deliveries and pagination metadata.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PaginatedDeliveryEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -319,10 +355,10 @@
         "summary": "List the authenticated customer's deliveries",
         "x-required-roles": ["CUSTOMER"],
         "responses": {
-          "200": { "description": "The customer's delivery array.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryListEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"The customer's delivery array.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliveryListEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -333,10 +369,10 @@
         "summary": "List deliveries assigned to the authenticated driver",
         "x-required-roles": ["DRIVER"],
         "responses": {
-          "200": { "description": "Assigned-delivery array and count.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliveryCountEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Assigned-delivery array and count.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliveryCountEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -345,12 +381,12 @@
         "operationId": "getDeliveryStatistics",
         "tags": ["Deliveries"],
         "summary": "Get delivery counts by status",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
         "responses": {
-          "200": { "description": "Delivery totals grouped by lifecycle status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Delivery totals grouped by lifecycle status.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatisticsEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -360,14 +396,14 @@
         "tags": ["Deliveries"],
         "summary": "Get delivery details",
         "description": "Accessible to staff, the owning customer, or the assigned driver. Customer and driver queries are ownership-scoped in the database; an out-of-scope or unknown delivery returns 404.",
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Delivery with customer, driver, and event details.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Delivery with customer, driver, and event details.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliverySuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -377,18 +413,39 @@
         "tags": ["Deliveries"],
         "summary": "Assign or reassign a driver",
         "description": "Available for PENDING deliveries and reassignment of ASSIGNED deliveries. Notifies the new and previous driver where applicable. Idempotency-Key is optional and supports safe retries for the same actor, operation and payload.",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }, { "name": "Idempotency-Key", "in": "header", "required": false, "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.", "schema": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" } }],
-        "requestBody": { "$ref": "#/components/requestBodies/AssignDriverRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [
+          {"$ref":"#/components/parameters/UuidId"},
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "8–128 letters, digits, dot, underscore, colon, or dash. Scoped to the authenticated actor and operation.",
+            "schema": {"type":"string","minLength":8,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]{8,128}$"}
+          }
+        ],
+        "requestBody": {"$ref":"#/components/requestBodies/AssignDriverRequest"},
         "responses": {
-          "200": { "description": "Updated delivery.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Updated delivery.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliverySuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
+      }
+    },
+    "/api/v1/deliveries/{id}/requirements": {
+      "patch": {
+        "operationId": "updateDeliveryRequirements", "tags": ["Deliveries"],
+        "summary": "Update pending delivery transport requirements",
+        "description": "Staff-only. Only PENDING deliveries can have vehicle type, minimum capacity, refrigeration, or required qualification codes changed.",
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"requiredVehicleType":{"type":["string","null"],"enum":["MOTORCYCLE","CAR","VAN","TRUCK","REFRIGERATED_TRUCK",null]},"minimumPayloadKg":{"type":["number","null"],"exclusiveMinimum":0},"minimumVolumeCubicMeters":{"type":["number","null"],"exclusiveMinimum":0},"requiresRefrigeratedTransport":{"type":"boolean"},"requiredQualifications":{"type":"array","items":{"type":"string","pattern":"^[A-Z0-9][A-Z0-9_.-]*$"}}}}}}},
+        "responses":{"200":{"description":"Updated delivery requirements."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"},"429":{"$ref":"#/components/responses/RateLimited"},"500":{"$ref":"#/components/responses/InternalError"}}
       }
     },
     "/api/v1/deliveries/{id}/status": {
@@ -397,17 +454,17 @@
         "tags": ["Deliveries"],
         "summary": "Advance or cancel a delivery",
         "description": "Transitions: PENDING→CANCELLED; ASSIGNED→PICKED_UP or CANCELLED; PICKED_UP→IN_TRANSIT; IN_TRANSIT→DELIVERED. Staff may update delivery status; drivers may update only their assigned delivery; customers may cancel only their own PENDING delivery. A customer or driver targeting a delivery outside their ownership scope receives 404.",
-        "x-required-roles": ["CUSTOMER", "DRIVER", "ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/UpdateDeliveryStatusRequest" },
+        "x-required-roles": ["CUSTOMER","DRIVER","ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/UpdateDeliveryStatusRequest"},
         "responses": {
-          "200": { "description": "Updated delivery.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeliverySuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Updated delivery.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DeliverySuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -416,33 +473,34 @@
         "operationId": "updateDriverLocation",
         "tags": ["Deliveries"],
         "summary": "Record the authenticated driver's GPS location",
-        "description": "The caller must be the assigned driver and the delivery must be PICKED_UP or IN_TRANSIT. An unassigned driver receives 404.",
+        "description": "The caller must be the authenticated assigned driver and the delivery must be PICKED_UP or IN_TRANSIT. Driver IDs in request bodies are not accepted. Timestamps older than GPS_MAX_AGE_SECONDS, more than GPS_MAX_FUTURE_SKEW_SECONDS in the future, or not newer than the latest stored point are rejected. Redis-backed per-client rate limit is 60 requests per minute. Successful responses include ageSeconds and isStale; these indicate age only, not coordinate accuracy.",
         "x-required-roles": ["DRIVER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/DriverLocationRequest" },
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/DriverLocationRequest"},
         "responses": {
-          "201": { "description": "Location recorded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LocationSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "201": {"description":"Location recorded.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/LocationSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "get": {
         "operationId": "getLatestDriverLocation",
         "tags": ["Deliveries"],
         "summary": "Get latest driver location for a delivery",
-        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Data is null when no location has been recorded.",
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Data is null when no location has been recorded. A present data object includes ageSeconds and isStale based on GPS_STALE_AFTER_SECONDS; this is not a coordinate-accuracy guarantee.",
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Latest location or null.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NullableLocationEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Latest location or null.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/NullableLocationEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -451,19 +509,43 @@
         "operationId": "getDriverLocationHistory",
         "tags": ["Deliveries"],
         "summary": "Get paginated driver location history",
-        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Pagination is returned inside data.pagination for this endpoint.",
+        "description": "Accessible to staff, the owning customer, or assigned driver. Ownership is enforced in the database query; an out-of-scope or unknown delivery returns 404. Supports inclusive ISO 8601 `from` and `to` timestamp filters; `from` must not follow `to`. Pagination is returned inside data.pagination for this endpoint.",
         "parameters": [
-          { "$ref": "#/components/parameters/UuidId" },
-          { "$ref": "#/components/parameters/Page" },
-          { "$ref": "#/components/parameters/LocationLimit" }
+          {"$ref":"#/components/parameters/UuidId"},
+          {"$ref":"#/components/parameters/Page"},
+          {"$ref":"#/components/parameters/LocationLimit"},
+          {"$ref":"#/components/parameters/LocationFrom"},
+          {"$ref":"#/components/parameters/LocationTo"}
         ],
         "responses": {
-          "200": { "description": "Chronological location history with pagination nested under data.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LocationHistoryEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {
+            "description": "Chronological location history with pagination nested under data.",
+            "content": {"application/json":{"schema":{"$ref":"#/components/schemas/LocationHistoryEnvelope"}}}
+          },
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/api/v1/drivers/active-locations": {
+      "get": {
+        "operationId": "getActiveDriverLocations",
+        "tags": ["Drivers"],
+        "summary": "Get latest locations for active drivers",
+        "description": "Staff-only and rate-limited. Returns paginated latest GPS locations for active drivers currently on ASSIGNED, PICKED_UP, or IN_TRANSIT deliveries. Personal profile data is omitted. `isStale` compares age with GPS_STALE_AFTER_SECONDS and does not guarantee coordinate accuracy.",
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/ActiveLocationLimit"}],
+        "responses": {
+          "200": {"description":"Paginated active-driver location snapshot.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ActiveDriverLocationsEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -472,34 +554,34 @@
         "operationId": "createDriver",
         "tags": ["Drivers"],
         "summary": "Create a driver account",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "requestBody": { "$ref": "#/components/requestBodies/CreateStaffUserRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "requestBody": {"$ref":"#/components/requestBodies/CreateStaffUserRequest"},
         "responses": {
-          "201": { "description": "Driver created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "201": {"description":"Driver created.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "get": {
         "operationId": "listDrivers",
         "tags": ["Drivers"],
         "summary": "Search and paginate drivers",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
         "parameters": [
-          { "name": "search", "in": "query", "schema": { "type": "string" } },
-          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/UserStatus" } },
-          { "$ref": "#/components/parameters/Page" },
-          { "$ref": "#/components/parameters/Limit10" }
+          {"name":"search","in":"query","schema":{"type":"string"}},
+          {"name":"status","in":"query","schema":{"$ref":"#/components/schemas/UserStatus"}},
+          {"$ref":"#/components/parameters/Page"},
+          {"$ref":"#/components/parameters/Limit10"}
         ],
         "responses": {
-          "200": { "description": "Driver array with pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedUserEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Driver array with pagination metadata.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PaginatedUserEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -508,32 +590,32 @@
         "operationId": "getDriver",
         "tags": ["Drivers"],
         "summary": "Get driver profile and recent deliveries",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Driver profile with up to ten recent assigned deliveries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Driver profile with up to ten recent assigned deliveries.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "patch": {
         "operationId": "updateDriver",
         "tags": ["Drivers"],
         "summary": "Update driver name or phone",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/UpdateDriverRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/UpdateDriverRequest"},
         "responses": {
-          "200": { "description": "Driver updated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Driver updated.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -543,34 +625,40 @@
         "tags": ["Drivers"],
         "summary": "Change driver account status",
         "description": "Driver deactivation/suspension is rejected while ASSIGNED, PICKED_UP, or IN_TRANSIT deliveries remain.",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/UpdateStatusRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/UpdateStatusRequest"},
         "responses": {
-          "200": { "description": "Updated driver status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Updated driver status.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
+    "/api/v1/drivers/{id}/availability": {"patch":{"operationId":"updateDriverAvailability","tags":["Drivers"],"summary":"Change workforce availability","description":"Admin-only. Availability is distinct from account status. Setting SUSPENDED is blocked while active deliveries exist.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["availability"],"properties":{"availability":{"type":"string","enum":["AVAILABLE","UNAVAILABLE","ON_BREAK","OFF_DUTY","SUSPENDED"]}}}}}},"responses":{"200":{"description":"Updated availability."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"},"429":{"$ref":"#/components/responses/RateLimited"},"500":{"$ref":"#/components/responses/InternalError"}}}},
+    "/api/v1/drivers/{id}/qualifications": {"get":{"operationId":"listDriverQualifications","tags":["Drivers"],"summary":"List driver qualifications","x-required-roles":["ADMIN","SUPER_ADMIN","DISPATCHER"],"parameters":[{"$ref":"#/components/parameters/UuidId"},{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/Limit10"}],"responses":{"200":{"description":"Paginated qualification records."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"}}},"post":{"operationId":"createDriverQualification","tags":["Drivers"],"summary":"Record a driver qualification for verification","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["qualificationType"],"properties":{"qualificationType":{"type":"string","maxLength":60},"licenseCategory":{"type":"string","maxLength":20},"issuedAt":{"type":"string","format":"date-time"},"expiresAt":{"type":"string","format":"date-time"},"notes":{"type":"string","maxLength":500}}}}}},"responses":{"201":{"description":"Qualification recorded as PENDING."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
+    "/api/v1/drivers/{id}/qualifications/{qualificationId}/verification": {"patch":{"operationId":"verifyDriverQualification","tags":["Drivers"],"summary":"Verify or reject a driver qualification","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"},{"name":"qualificationId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["VERIFIED","REJECTED"]}}}}}},"responses":{"200":{"description":"Updated qualification verification status."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
+    "/api/v1/drivers/{id}/shifts": {"get":{"operationId":"listDriverShifts","tags":["Drivers"],"summary":"List paginated driver shifts","description":"Optional status and ISO date filters; timezone preserves the submitted IANA zone.","x-required-roles":["ADMIN","SUPER_ADMIN","DISPATCHER"],"parameters":[{"$ref":"#/components/parameters/UuidId"},{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/Limit10"}],"responses":{"200":{"description":"Paginated shift records."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"}}},"post":{"operationId":"createDriverShift","tags":["Drivers"],"summary":"Schedule a driver shift","description":"Offset-aware timestamps and an IANA timezone are required. Scheduled/active shifts cannot overlap.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["startsAt","endsAt","timezone"],"properties":{"startsAt":{"type":"string","format":"date-time"},"endsAt":{"type":"string","format":"date-time"},"timezone":{"type":"string","example":"Asia/Tbilisi"}}}}}},"responses":{"201":{"description":"Scheduled shift."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
+    "/api/v1/drivers/{id}/shifts/{shiftId}": {"patch":{"operationId":"updateDriverShift","tags":["Drivers"],"summary":"Update a scheduled shift","description":"Only SCHEDULED shifts may be edited; overlaps are rejected.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"},{"name":"shiftId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["startsAt","endsAt","timezone"],"properties":{"startsAt":{"type":"string","format":"date-time"},"endsAt":{"type":"string","format":"date-time"},"timezone":{"type":"string"}}}}}},"responses":{"200":{"description":"Updated scheduled shift."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
+    "/api/v1/drivers/{id}/shifts/{shiftId}/status": {"patch":{"operationId":"updateDriverShiftStatus","tags":["Drivers"],"summary":"Activate, complete, or cancel a shift","description":"Activation is allowed only in the scheduled window; completion only after its end; active shifts cannot be cancelled while the driver has active deliveries.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"},{"name":"shiftId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["ACTIVE","COMPLETED","CANCELLED"]}}}}}},"responses":{"200":{"description":"Updated shift status."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
     "/api/v1/drivers/{id}/statistics": {
       "get": {
         "operationId": "getDriverStatistics",
         "tags": ["Drivers"],
         "summary": "Get driver delivery counts by status",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Driver identity and delivery totals by status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Driver identity and delivery totals by status.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatisticsEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -579,34 +667,34 @@
         "operationId": "createCustomer",
         "tags": ["Customers"],
         "summary": "Create a customer account",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "requestBody": { "$ref": "#/components/requestBodies/CreateStaffUserRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "requestBody": {"$ref":"#/components/requestBodies/CreateStaffUserRequest"},
         "responses": {
-          "201": { "description": "Customer created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "201": {"description":"Customer created.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "get": {
         "operationId": "listCustomers",
         "tags": ["Customers"],
         "summary": "Search and paginate customers",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
         "parameters": [
-          { "name": "search", "in": "query", "schema": { "type": "string" } },
-          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/UserStatus" } },
-          { "$ref": "#/components/parameters/Page" },
-          { "$ref": "#/components/parameters/Limit10" }
+          {"name":"search","in":"query","schema":{"type":"string"}},
+          {"name":"status","in":"query","schema":{"$ref":"#/components/schemas/UserStatus"}},
+          {"$ref":"#/components/parameters/Page"},
+          {"$ref":"#/components/parameters/Limit10"}
         ],
         "responses": {
-          "200": { "description": "Customer array with pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedUserEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Customer array with pagination metadata.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PaginatedUserEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -615,32 +703,32 @@
         "operationId": "getCustomer",
         "tags": ["Customers"],
         "summary": "Get customer profile and recent deliveries",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Customer profile with up to ten recent deliveries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Customer profile with up to ten recent deliveries.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       },
       "patch": {
         "operationId": "updateCustomer",
         "tags": ["Customers"],
         "summary": "Update customer name or phone",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/UpdateCustomerRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/UpdateCustomerRequest"},
         "responses": {
-          "200": { "description": "Customer updated.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Customer updated.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -649,16 +737,16 @@
         "operationId": "updateCustomerStatus",
         "tags": ["Customers"],
         "summary": "Change customer account status",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
-        "requestBody": { "$ref": "#/components/requestBodies/UpdateStatusRequest" },
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
+        "requestBody": {"$ref":"#/components/requestBodies/UpdateStatusRequest"},
         "responses": {
-          "200": { "description": "Updated customer status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Updated customer status.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UserSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -667,15 +755,15 @@
         "operationId": "getCustomerStatistics",
         "tags": ["Customers"],
         "summary": "Get customer delivery counts by status",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN", "DISPATCHER"],
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Customer identity and delivery totals by status.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StatisticsEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Customer identity and delivery totals by status.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/StatisticsEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -685,15 +773,20 @@
         "tags": ["Notifications"],
         "summary": "List notifications for the current user",
         "parameters": [
-          { "$ref": "#/components/parameters/Page" },
-          { "$ref": "#/components/parameters/Limit10" },
-          { "name": "unreadOnly", "in": "query", "description": "When true, include only unread notifications. Accepted query strings are true or false.", "schema": { "type": "string", "enum": ["true", "false"] } }
+          {"$ref":"#/components/parameters/Page"},
+          {"$ref":"#/components/parameters/Limit10"},
+          {
+            "name": "unreadOnly",
+            "in": "query",
+            "description": "When true, include only unread notifications. Accepted query strings are true or false.",
+            "schema": {"type":"string","enum":["true","false"]}
+          }
         ],
         "responses": {
-          "200": { "description": "Notifications and top-level pagination metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedNotificationEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Notifications and top-level pagination metadata.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PaginatedNotificationEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -703,9 +796,9 @@
         "tags": ["Notifications"],
         "summary": "Get unread notification count for the current user",
         "responses": {
-          "200": { "description": "Unread count.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UnreadCountEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Unread count.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UnreadCountEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -715,9 +808,9 @@
         "tags": ["Notifications"],
         "summary": "Mark all current user's unread notifications as read",
         "responses": {
-          "200": { "description": "Number of updated notification records.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdatedCountEnvelope" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Number of updated notification records.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdatedCountEnvelope"}}}},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -726,13 +819,13 @@
         "operationId": "markNotificationRead",
         "tags": ["Notifications"],
         "summary": "Mark one current user's notification as read",
-        "parameters": [{ "$ref": "#/components/parameters/UuidId" }],
+        "parameters": [{"$ref":"#/components/parameters/UuidId"}],
         "responses": {
-          "200": { "description": "Updated notification.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NotificationSuccessEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Updated notification.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/NotificationSuccessEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
     },
@@ -742,158 +835,235 @@
         "tags": ["Audit Logs"],
         "summary": "List security and administrative audit records",
         "description": "Read-only, rate-limited endpoint restricted to ADMIN and SUPER_ADMIN. Records are ordered by createdAt descending then ID descending. Metadata contains only allowlisted values; there are no update, delete, or individual-record endpoints.",
-        "x-required-roles": ["ADMIN", "SUPER_ADMIN"],
+        "x-required-roles": ["ADMIN","SUPER_ADMIN"],
         "parameters": [
-          { "$ref": "#/components/parameters/Page" },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 25 } },
-          { "name": "actorUserId", "in": "query", "schema": { "type": "string", "format": "uuid" } },
-          { "name": "action", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_.-]{1,99}$" } },
-          { "name": "resourceType", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{1,49}$" } },
-          { "name": "resourceId", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 100 } },
-          { "name": "outcome", "in": "query", "schema": { "$ref": "#/components/schemas/AuditOutcome" } },
-          { "name": "from", "in": "query", "description": "Inclusive ISO date-time lower bound.", "schema": { "type": "string", "format": "date-time" } },
-          { "name": "to", "in": "query", "description": "Inclusive ISO date-time upper bound.", "schema": { "type": "string", "format": "date-time" } }
+          {"$ref":"#/components/parameters/Page"},
+          {"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"maximum":100,"default":25}},
+          {"name":"actorUserId","in":"query","schema":{"type":"string","format":"uuid"}},
+          {"name":"action","in":"query","schema":{"type":"string","pattern":"^[a-z][a-z0-9_.-]{1,99}$"}},
+          {"name":"resourceType","in":"query","schema":{"type":"string","pattern":"^[a-z][a-z0-9_-]{1,49}$"}},
+          {"name":"resourceId","in":"query","schema":{"type":"string","minLength":1,"maxLength":100}},
+          {"name":"outcome","in":"query","schema":{"$ref":"#/components/schemas/AuditOutcome"}},
+          {"name":"from","in":"query","description":"Inclusive ISO date-time lower bound.","schema":{"type":"string","format":"date-time"}},
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Inclusive ISO date-time upper bound. If both bounds are provided, the range cannot exceed GPS_LOCATION_RETENTION_DAYS.",
+            "schema": {"type":"string","format":"date-time"}
+          }
         ],
         "responses": {
-          "200": { "description": "Filtered audit records and pagination.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PaginatedAuditLogEnvelope" } } } },
-          "400": { "$ref": "#/components/responses/Validation" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "429": { "$ref": "#/components/responses/RateLimited" },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "200": {"description":"Filtered audit records and pagination.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/PaginatedAuditLogEnvelope"}}}},
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
         }
       }
-    }
+    },
+    "/api/v1/dispatch/deliveries/{id}/recommendations": {
+      "get": {
+        "operationId": "getDispatchDriverRecommendations",
+        "tags": ["Dispatch"],
+        "summary": "Recommend eligible drivers for a delivery",
+        "description": "Advisory only; never assigns or reserves a driver. Requires a PENDING or ASSIGNED delivery with pickup coordinates. Candidates must have an active account, AVAILABLE status, an active shift covering now, a suitable ACTIVE assigned vehicle, verified and unexpired required qualifications, fresh GPS, and workload below DISPATCH_MAX_ACTIVE_DELIVERIES. Missing shift, vehicle, qualification, or GPS data excludes a candidate. Scoring weights are configurable percentages and must sum to 100 (defaults 60/25/15/0); equal scores are ordered by ascending driver UUID. Distance is a Haversine straight-line approximation, not road distance or ETA. Direct staff assignment can omit pickup coordinates, in which case the GPS freshness check is skipped; assignment rechecks other eligibility conditions and does not reserve a candidate. Rate limit: 30 requests per minute.",
+        "x-required-roles": ["ADMIN","SUPER_ADMIN","DISPATCHER"],
+        "parameters": [
+          {"$ref":"#/components/parameters/UuidId"},
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum candidates to return (default 10, maximum 50).",
+            "schema": {"type":"integer","minimum":1,"maximum":50,"default":10}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ranked eligible driver candidates. Only driver IDs and operational score details are returned.",
+            "content": {"application/json":{"schema":{"$ref":"#/components/schemas/DispatchRecommendationEnvelope"}}}
+          },
+          "400": {"$ref":"#/components/responses/Validation"},
+          "401": {"$ref":"#/components/responses/Unauthorized"},
+          "403": {"$ref":"#/components/responses/Forbidden"},
+          "404": {"$ref":"#/components/responses/NotFound"},
+          "409": {"$ref":"#/components/responses/Conflict"},
+          "429": {"$ref":"#/components/responses/RateLimited"},
+          "500": {"$ref":"#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/api/v1/vehicles": {
+      "get": {"operationId":"listVehicles","tags":["Vehicles"],"summary":"Filter and paginate vehicles","x-required-roles":["ADMIN","SUPER_ADMIN","DISPATCHER"],"parameters":[{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/Limit10"}],"responses":{"200":{"description":"Paginated vehicle records and current assignment summaries."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"429":{"$ref":"#/components/responses/RateLimited"}}},
+      "post": {"operationId":"createVehicle","tags":["Vehicles"],"summary":"Register a vehicle","x-required-roles":["ADMIN","SUPER_ADMIN"],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["registrationIdentifier","type","maximumPayloadKg"],"properties":{"registrationIdentifier":{"type":"string","maxLength":32},"type":{"type":"string","enum":["MOTORCYCLE","CAR","VAN","TRUCK","REFRIGERATED_TRUCK"]},"maximumPayloadKg":{"type":"number","exclusiveMinimum":0},"maximumVolumeCubicMeters":{"type":"number","exclusiveMinimum":0},"refrigerated":{"type":"boolean"},"description":{"type":"string","maxLength":250}}}}}},"responses":{"201":{"description":"Registered vehicle."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"409":{"$ref":"#/components/responses/Conflict"},"429":{"$ref":"#/components/responses/RateLimited"}}}
+    },
+    "/api/v1/vehicles/{id}": {
+      "get": {"operationId":"getVehicle","tags":["Vehicles"],"summary":"Get vehicle and current assignment","x-required-roles":["ADMIN","SUPER_ADMIN","DISPATCHER"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"responses":{"200":{"description":"Vehicle record with current assignment summary."},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"}}},
+      "patch": {"operationId":"updateVehicle","tags":["Vehicles"],"summary":"Update vehicle details or capacity","description":"Capacity reductions are rejected while active work depends on the vehicle or assigned driver.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","properties":{"registrationIdentifier":{"type":"string","maxLength":32},"type":{"type":"string","enum":["MOTORCYCLE","CAR","VAN","TRUCK","REFRIGERATED_TRUCK"]},"maximumPayloadKg":{"type":"number","exclusiveMinimum":0},"maximumVolumeCubicMeters":{"type":["number","null"],"exclusiveMinimum":0},"refrigerated":{"type":"boolean"},"description":{"type":["string","null"],"maxLength":250}}}}}},"responses":{"200":{"description":"Updated vehicle."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}
+    },
+    "/api/v1/vehicles/{id}/status": {"patch":{"operationId":"updateVehicleStatus","tags":["Vehicles"],"summary":"Change vehicle operational state","description":"Vehicles cannot enter maintenance/inactive while active deliveries depend on them.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["ACTIVE","MAINTENANCE","INACTIVE"]}}}}}},"responses":{"200":{"description":"Updated vehicle status."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}},
+    "/api/v1/vehicles/{id}/assignment": {"put":{"operationId":"assignVehicle","tags":["Vehicles"],"summary":"Assign an active vehicle to a driver","description":"One current vehicle per driver and one driver per vehicle. Assignment changes are blocked while the driver has active deliveries; prior assignments remain in history.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["driverId"],"properties":{"driverId":{"type":"string","format":"uuid"}}}}}},"responses":{"200":{"description":"Vehicle assigned to driver."},"400":{"$ref":"#/components/responses/Validation"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}},"delete":{"operationId":"unassignVehicle","tags":["Vehicles"],"summary":"End a current vehicle assignment","description":"Blocked while the assigned driver has active deliveries. The historical assignment remains stored.","x-required-roles":["ADMIN","SUPER_ADMIN"],"parameters":[{"$ref":"#/components/parameters/UuidId"}],"responses":{"200":{"description":"Vehicle assignment ended."},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"404":{"$ref":"#/components/responses/NotFound"},"409":{"$ref":"#/components/responses/Conflict"}}}}
   },
   "components": {
     "securitySchemes": {
-      "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT", "description": "Access token returned by register, login, or refresh." },
-      "MetricsBearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "opaque", "description": "Value configured in METRICS_ACCESS_TOKEN. Metrics return 404 while this token is not configured." },
-      "DocsBasicAuth": { "type": "http", "scheme": "basic", "description": "Production only when API_DOCS_ENABLED=true. Use username docs and API_DOCS_ACCESS_TOKEN as password. Development access has no Basic auth." }
+      "BearerAuth": {"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"Access token returned by register, login, or refresh."},
+      "MetricsBearerAuth": {"type":"http","scheme":"bearer","bearerFormat":"opaque","description":"Value configured in METRICS_ACCESS_TOKEN. Metrics return 404 while this token is not configured."},
+      "DocsBasicAuth": {
+        "type": "http",
+        "scheme": "basic",
+        "description": "Production only when API_DOCS_ENABLED=true. Use username docs and API_DOCS_ACCESS_TOKEN as password. Development access has no Basic auth."
+      }
     },
     "parameters": {
-      "UuidId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } },
-      "TrackingCode": { "name": "trackingCode", "in": "path", "required": true, "schema": { "type": "string", "minLength": 1, "example": "FF-ABC123DEF456" } },
-      "Page": { "name": "page", "in": "query", "description": "1-based page number.", "schema": { "type": "integer", "minimum": 1, "default": 1 } },
-      "Limit10": { "name": "limit", "in": "query", "description": "Page size, maximum 100.", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 } },
-      "LocationLimit": { "name": "limit", "in": "query", "description": "Page size for location history, maximum 100.", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+      "UuidId": {"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+      "TrackingCode": {"name":"trackingCode","in":"path","required":true,"schema":{"type":"string","minLength":1,"example":"FF-ABC123DEF456"}},
+      "Page": {"name":"page","in":"query","description":"1-based page number.","schema":{"type":"integer","minimum":1,"default":1}},
+      "Limit10": {"name":"limit","in":"query","description":"Page size, maximum 100.","schema":{"type":"integer","minimum":1,"maximum":100,"default":10}},
+      "LocationLimit": {"name":"limit","in":"query","description":"Page size for location history, maximum 100.","schema":{"type":"integer","minimum":1,"maximum":100,"default":50}},
+      "ActiveLocationLimit": {"name":"limit","in":"query","description":"Page size for active driver locations, maximum 100.","schema":{"type":"integer","minimum":1,"maximum":100,"default":25}},
+      "LocationFrom": {"name":"from","in":"query","description":"Optional inclusive ISO 8601 lower timestamp bound.","schema":{"type":"string","format":"date-time"}},
+      "LocationTo": {
+        "name": "to",
+        "in": "query",
+        "description": "Optional inclusive ISO 8601 upper timestamp bound; must not precede from. When both are set, the range cannot exceed GPS_LOCATION_RETENTION_DAYS.",
+        "schema": {"type":"string","format":"date-time"}
+      }
     },
     "requestBodies": {
-      "RegisterRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterRequest" } } } },
-      "LoginRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } } },
-      "RefreshTokenRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RefreshTokenRequest" } } } },
-      "EmailTokenRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EmailTokenRequest" } } } },
-      "EmailAddressRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EmailAddressRequest" } } } },
-      "PasswordResetRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PasswordResetRequest" } } } },
-      "CreateDeliveryRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateDeliveryRequest" } } } },
-      "AssignDriverRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AssignDriverRequest" } } } },
-      "UpdateDeliveryStatusRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateDeliveryStatusRequest" } } } },
-      "DriverLocationRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DriverLocationRequest" } } } },
-      "CreateStaffUserRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateStaffUserRequest" } } } },
-      "UpdateDriverRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateDriverRequest" } } } },
-      "UpdateCustomerRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCustomerRequest" } } } },
-      "UpdateStatusRequest": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateStatusRequest" } } } }
+      "RegisterRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RegisterRequest"}}}},
+      "LoginRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/LoginRequest"}}}},
+      "RefreshTokenRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RefreshTokenRequest"}}}},
+      "EmailTokenRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/EmailTokenRequest"}}}},
+      "EmailAddressRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/EmailAddressRequest"}}}},
+      "PasswordResetRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PasswordResetRequest"}}}},
+      "CreateDeliveryRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateDeliveryRequest"}}}},
+      "AssignDriverRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/AssignDriverRequest"}}}},
+      "UpdateDeliveryStatusRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateDeliveryStatusRequest"}}}},
+      "DriverLocationRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/DriverLocationRequest"}}}},
+      "CreateStaffUserRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CreateStaffUserRequest"}}}},
+      "UpdateDriverRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateDriverRequest"}}}},
+      "UpdateCustomerRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateCustomerRequest"}}}},
+      "UpdateStatusRequest": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/UpdateStatusRequest"}}}}
     },
     "responses": {
-      "Validation": { "description": "Validation failure. Controller-specific errors may use a flat field map or an array of path/message entries.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "Unauthorized": { "description": "Authentication is missing or invalid.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "Forbidden": { "description": "Caller is authenticated but lacks the required role or resource ownership.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "NotFound": { "description": "Resource was not found.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "Conflict": { "description": "Unique constraint, lifecycle, or concurrent update conflict.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "RateLimited": { "description": "Endpoint request limit exceeded.", "headers": { "Retry-After": { "schema": { "type": "integer" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "DependencyUnavailable": { "description": "A required dependency or rate-limit store is unavailable.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } },
-      "InternalError": { "description": "Unexpected server error. Internal details are not returned.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } } }
+      "Validation": {
+        "description": "Validation failure. Controller-specific errors may use a flat field map or an array of path/message entries.",
+        "content": {"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}
+      },
+      "Unauthorized": {"description":"Authentication is missing or invalid.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+      "Forbidden": {"description":"Caller is authenticated but lacks the required role or resource ownership.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+      "NotFound": {"description":"Resource was not found.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+      "Conflict": {"description":"Unique constraint, lifecycle, or concurrent update conflict.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+      "RateLimited": {
+        "description": "Endpoint request limit exceeded.",
+        "headers": {"Retry-After":{"schema":{"type":"integer"}}},
+        "content": {"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}
+      },
+      "DependencyUnavailable": {"description":"A required dependency or rate-limit store is unavailable.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}},
+      "InternalError": {"description":"Unexpected server error. Internal details are not returned.","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorEnvelope"}}}}
     },
     "schemas": {
-      "SuccessEnvelope": { "type": "object", "required": ["success"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": {}, "pagination": { "$ref": "#/components/schemas/Pagination" }, "count": { "type": "integer" } } },
-      "MessageSuccessEnvelope": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": true }, "message": { "type": "string" } } },
-      "ErrorEnvelope": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": false }, "code": { "type": "string" }, "message": { "type": "string" }, "errors": {} } },
-      "MessageError": { "type": "object", "required": ["success", "message"], "properties": { "success": { "const": false }, "message": { "type": "string" } } },
-      "Pagination": { "type": "object", "required": ["total", "page", "limit", "totalPages", "hasNextPage", "hasPreviousPage"], "properties": { "total": { "type": "integer" }, "page": { "type": "integer", "minimum": 1 }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "totalPages": { "type": "integer" }, "hasNextPage": { "type": "boolean" }, "hasPreviousPage": { "type": "boolean" } } },
-      "UserRole": { "type": "string", "enum": ["SUPER_ADMIN", "ADMIN", "DISPATCHER", "DRIVER", "CUSTOMER"] },
-      "UserStatus": { "type": "string", "enum": ["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"] },
-      "DeliveryStatus": { "type": "string", "enum": ["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] },
-      "AuditOutcome": { "type": "string", "enum": ["SUCCESS", "FAILURE", "DENIED"] },
-      "AuditLog": { "type": "object", "required": ["id", "action", "resourceType", "outcome", "createdAt"], "properties": { "id": { "type": "string", "format": "uuid" }, "actorUserId": { "type": ["string", "null"], "format": "uuid" }, "actorRole": { "oneOf": [{ "$ref": "#/components/schemas/UserRole" }, { "type": "null" }] }, "action": { "type": "string" }, "resourceType": { "type": "string" }, "resourceId": { "type": ["string", "null"] }, "outcome": { "$ref": "#/components/schemas/AuditOutcome" }, "requestId": { "type": ["string", "null"] }, "ipAddress": { "type": ["string", "null"], "description": "Validated IPv4 or IPv6 address." }, "metadata": { "type": ["object", "null"], "additionalProperties": false, "properties": { "reason": { "type": "string" }, "previousRole": { "type": "string" }, "newRole": { "type": "string" }, "previousStatus": { "type": "string" }, "newStatus": { "type": "string" }, "fromStatus": { "type": "string" }, "toStatus": { "type": "string" }, "status": { "type": "string" }, "changedFields": { "type": "array", "items": { "type": "string" } }, "sessionRevoked": { "type": "boolean" } } }, "createdAt": { "type": "string", "format": "date-time" } } },
-      "PaginatedAuditLogEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/AuditLog" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
-      "AuthUser": { "type": "object", "required": ["id", "firstName", "lastName", "email", "phone", "role", "status"], "properties": { "id": { "type": "string", "format": "uuid" }, "firstName": { "type": "string" }, "lastName": { "type": "string" }, "email": { "type": "string", "format": "email" }, "phone": { "type": ["string", "null"] }, "role": { "$ref": "#/components/schemas/UserRole" }, "status": { "$ref": "#/components/schemas/UserStatus" } } },
-      "Tokens": { "type": "object", "required": ["accessToken", "refreshToken", "tokenType", "expiresIn"], "properties": { "accessToken": { "type": "string" }, "refreshToken": { "type": "string" }, "tokenType": { "const": "Bearer" }, "expiresIn": { "type": "integer", "description": "Access token lifetime in seconds." } } },
-      "AuthSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "required": ["user", "tokens"], "properties": { "user": { "$ref": "#/components/schemas/AuthUser" }, "tokens": { "$ref": "#/components/schemas/Tokens" } } } } },
-      "TokenSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/Tokens" } } },
-      "UserSuccessEnvelope": { "allOf": [{ "$ref": "#/components/schemas/SuccessEnvelope" }, { "type": "object", "properties": { "data": { "type": "object", "additionalProperties": true } } }] },
-      "DeliverySuccessEnvelope": { "allOf": [{ "$ref": "#/components/schemas/SuccessEnvelope" }, { "type": "object", "properties": { "data": { "$ref": "#/components/schemas/Delivery" } } }] },
-      "DeliveryListEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } } } },
-      "DeliveryCountEnvelope": { "type": "object", "required": ["success", "count", "data"], "properties": { "success": { "const": true }, "count": { "type": "integer" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } } } },
-      "PaginatedDeliveryEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Delivery" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
-      "PaginatedUserEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "type": "object", "additionalProperties": true } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
-      "Delivery": { "type": "object", "description": "Delivery record. Detail/list endpoints may include related customer, driver, and events depending on endpoint.", "properties": { "id": { "type": "string", "format": "uuid" }, "trackingCode": { "type": "string" }, "customerId": { "type": "string", "format": "uuid" }, "driverId": { "type": ["string", "null"], "format": "uuid" }, "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "recipientName": { "type": "string" }, "recipientPhone": { "type": "string" }, "pickupAddress": { "type": "string" }, "pickupLatitude": { "type": ["number", "null"] }, "pickupLongitude": { "type": ["number", "null"] }, "deliveryAddress": { "type": "string" }, "deliveryLatitude": { "type": ["number", "null"] }, "deliveryLongitude": { "type": ["number", "null"] }, "packageDescription": { "type": ["string", "null"] }, "packageWeight": { "type": ["number", "null"] }, "notes": { "type": ["string", "null"] }, "assignedAt": { "type": ["string", "null"], "format": "date-time" }, "pickedUpAt": { "type": ["string", "null"], "format": "date-time" }, "deliveredAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" }, "updatedAt": { "type": "string", "format": "date-time" } } },
-      "TrackingEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "object", "required": ["trackingCode", "status", "createdAt", "events"], "properties": { "trackingCode": { "type": "string" }, "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "createdAt": { "type": "string", "format": "date-time" }, "assignedAt": { "type": ["string", "null"], "format": "date-time" }, "pickedUpAt": { "type": ["string", "null"], "format": "date-time" }, "deliveredAt": { "type": ["string", "null"], "format": "date-time" }, "events": { "type": "array", "items": { "type": "object", "required": ["status", "createdAt"], "properties": { "status": { "$ref": "#/components/schemas/DeliveryStatus" }, "createdAt": { "type": "string", "format": "date-time" } } } } } } } },
-      "DriverLocation": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "latitude": { "type": "number" }, "longitude": { "type": "number" }, "accuracy": { "type": ["number", "null"] }, "recordedAt": { "type": "string", "format": "date-time" }, "driverId": { "type": "string", "format": "uuid" } } },
-      "LocationSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/DriverLocation" } } },
-      "NullableLocationEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "oneOf": [{ "$ref": "#/components/schemas/DriverLocation" }, { "type": "null" }] } } },
-      "LocationHistoryEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "required": ["locations", "pagination"], "properties": { "locations": { "type": "array", "items": { "$ref": "#/components/schemas/DriverLocation" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } } } },
-      "StatisticsEnvelope": { "type": "object", "required": ["success", "data"], "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "driver": { "type": "object" }, "customer": { "type": "object" }, "deliveries": { "$ref": "#/components/schemas/StatusCounts" }, "total": { "type": "integer" }, "pending": { "type": "integer" }, "assigned": { "type": "integer" }, "pickedUp": { "type": "integer" }, "inTransit": { "type": "integer" }, "delivered": { "type": "integer" }, "cancelled": { "type": "integer" } } } } },
-      "StatusCounts": { "type": "object", "properties": { "total": { "type": "integer" }, "pending": { "type": "integer" }, "assigned": { "type": "integer" }, "pickedUp": { "type": "integer" }, "inTransit": { "type": "integer" }, "delivered": { "type": "integer" }, "cancelled": { "type": "integer" } } },
-      "ReadinessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "object", "properties": { "status": { "const": "ready" }, "dependencies": { "$ref": "#/components/schemas/DependencyStatus" } } } } },
-      "DependencyStatus": { "type": "object", "properties": { "database": { "type": "boolean" }, "redis": { "type": "boolean" } } },
+      "SuccessEnvelope": {"type":"object","required":["success"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{},"pagination":{"$ref":"#/components/schemas/Pagination"},"count":{"type":"integer"}}},
+      "MessageSuccessEnvelope": {"type":"object","required":["success","message"],"properties":{"success":{"const":true},"message":{"type":"string"}}},
+      "ErrorEnvelope": {"type":"object","required":["success","message"],"properties":{"success":{"const":false},"code":{"type":"string"},"message":{"type":"string"},"errors":{}}},
+      "MessageError": {"type":"object","required":["success","message"],"properties":{"success":{"const":false},"message":{"type":"string"}}},
+      "Pagination": {"type":"object","required":["total","page","limit","totalPages","hasNextPage","hasPreviousPage"],"properties":{"total":{"type":"integer"},"page":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1,"maximum":100},"totalPages":{"type":"integer"},"hasNextPage":{"type":"boolean"},"hasPreviousPage":{"type":"boolean"}}},
+      "UserRole": {"type":"string","enum":["SUPER_ADMIN","ADMIN","DISPATCHER","DRIVER","CUSTOMER"]},
+      "UserStatus": {"type":"string","enum":["ACTIVE","INACTIVE","SUSPENDED","PENDING_VERIFICATION"]},
+      "DeliveryStatus": {"type":"string","enum":["PENDING","ASSIGNED","PICKED_UP","IN_TRANSIT","DELIVERED","CANCELLED"]},
+      "AuditOutcome": {"type":"string","enum":["SUCCESS","FAILURE","DENIED"]},
+      "AuditLog": {"type":"object","required":["id","action","resourceType","outcome","createdAt"],"properties":{"id":{"type":"string","format":"uuid"},"actorUserId":{"type":["string","null"],"format":"uuid"},"actorRole":{"oneOf":[{"$ref":"#/components/schemas/UserRole"},{"type":"null"}]},"action":{"type":"string"},"resourceType":{"type":"string"},"resourceId":{"type":["string","null"]},"outcome":{"$ref":"#/components/schemas/AuditOutcome"},"requestId":{"type":["string","null"]},"ipAddress":{"type":["string","null"],"description":"Validated IPv4 or IPv6 address."},"metadata":{"type":["object","null"],"additionalProperties":false,"properties":{"reason":{"type":"string"},"previousRole":{"type":"string"},"newRole":{"type":"string"},"previousStatus":{"type":"string"},"newStatus":{"type":"string"},"fromStatus":{"type":"string"},"toStatus":{"type":"string"},"status":{"type":"string"},"changedFields":{"type":"array","items":{"type":"string"}},"sessionRevoked":{"type":"boolean"}}},"createdAt":{"type":"string","format":"date-time"}}},
+      "PaginatedAuditLogEnvelope": {"type":"object","required":["success","data","pagination"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"array","items":{"$ref":"#/components/schemas/AuditLog"}},"pagination":{"$ref":"#/components/schemas/Pagination"}}},
+      "AuthUser": {"type":"object","required":["id","firstName","lastName","email","phone","role","status"],"properties":{"id":{"type":"string","format":"uuid"},"firstName":{"type":"string"},"lastName":{"type":"string"},"email":{"type":"string","format":"email"},"phone":{"type":["string","null"]},"role":{"$ref":"#/components/schemas/UserRole"},"status":{"$ref":"#/components/schemas/UserStatus"}}},
+      "Tokens": {"type":"object","required":["accessToken","refreshToken","tokenType","expiresIn"],"properties":{"accessToken":{"type":"string"},"refreshToken":{"type":"string"},"tokenType":{"const":"Bearer"},"expiresIn":{"type":"integer","description":"Access token lifetime in seconds."}}},
+      "AuthSuccessEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"object","required":["user","tokens"],"properties":{"user":{"$ref":"#/components/schemas/AuthUser"},"tokens":{"$ref":"#/components/schemas/Tokens"}}}}},
+      "TokenSuccessEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"$ref":"#/components/schemas/Tokens"}}},
+      "UserSuccessEnvelope": {"allOf":[{"$ref":"#/components/schemas/SuccessEnvelope"},{"type":"object","properties":{"data":{"type":"object","additionalProperties":true}}}]},
+      "DeliverySuccessEnvelope": {"allOf":[{"$ref":"#/components/schemas/SuccessEnvelope"},{"type":"object","properties":{"data":{"$ref":"#/components/schemas/Delivery"}}}]},
+      "DeliveryListEnvelope": {"type":"object","required":["success","data"],"properties":{"success":{"const":true},"data":{"type":"array","items":{"$ref":"#/components/schemas/Delivery"}}}},
+      "DeliveryCountEnvelope": {"type":"object","required":["success","count","data"],"properties":{"success":{"const":true},"count":{"type":"integer"},"data":{"type":"array","items":{"$ref":"#/components/schemas/Delivery"}}}},
+      "PaginatedDeliveryEnvelope": {"type":"object","required":["success","data","pagination"],"properties":{"success":{"const":true},"data":{"type":"array","items":{"$ref":"#/components/schemas/Delivery"}},"pagination":{"$ref":"#/components/schemas/Pagination"}}},
+      "PaginatedUserEnvelope": {"type":"object","required":["success","data","pagination"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"array","items":{"type":"object","additionalProperties":true}},"pagination":{"$ref":"#/components/schemas/Pagination"}}},
+      "Delivery": {"type":"object","description":"Delivery record. Detail/list endpoints may include related customer, driver, and events depending on endpoint.","properties":{"id":{"type":"string","format":"uuid"},"trackingCode":{"type":"string"},"customerId":{"type":"string","format":"uuid"},"driverId":{"type":["string","null"],"format":"uuid"},"status":{"$ref":"#/components/schemas/DeliveryStatus"},"recipientName":{"type":"string"},"recipientPhone":{"type":"string"},"pickupAddress":{"type":"string"},"pickupLatitude":{"type":["number","null"]},"pickupLongitude":{"type":["number","null"]},"deliveryAddress":{"type":"string"},"deliveryLatitude":{"type":["number","null"]},"deliveryLongitude":{"type":["number","null"]},"packageDescription":{"type":["string","null"]},"packageWeight":{"type":["number","null"]},"notes":{"type":["string","null"]},"assignedAt":{"type":["string","null"],"format":"date-time"},"pickedUpAt":{"type":["string","null"],"format":"date-time"},"deliveredAt":{"type":["string","null"],"format":"date-time"},"createdAt":{"type":"string","format":"date-time"},"updatedAt":{"type":"string","format":"date-time"}}},
+      "TrackingEnvelope": {"type":"object","required":["success","data"],"properties":{"success":{"const":true},"data":{"type":"object","required":["trackingCode","status","createdAt","events"],"properties":{"trackingCode":{"type":"string"},"status":{"$ref":"#/components/schemas/DeliveryStatus"},"createdAt":{"type":"string","format":"date-time"},"assignedAt":{"type":["string","null"],"format":"date-time"},"pickedUpAt":{"type":["string","null"],"format":"date-time"},"deliveredAt":{"type":["string","null"],"format":"date-time"},"events":{"type":"array","items":{"type":"object","required":["status","createdAt"],"properties":{"status":{"$ref":"#/components/schemas/DeliveryStatus"},"createdAt":{"type":"string","format":"date-time"}}}}}}}},
+      "DriverLocation": {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"latitude":{"type":"number"},"longitude":{"type":"number"},"accuracy":{"type":["number","null"]},"recordedAt":{"type":"string","format":"date-time"},"driverId":{"type":"string","format":"uuid"},"ageSeconds":{"type":"integer","minimum":0},"isStale":{"type":"boolean","description":"Age-based signal only; not a guarantee of GPS accuracy."}}},
+      "ActiveDriverLocation": {"type":"object","required":["driverId","deliveryId","latitude","longitude","recordedAt","ageSeconds","isStale"],"properties":{"driverId":{"type":"string","format":"uuid"},"deliveryId":{"type":"string","format":"uuid"},"latitude":{"type":"number"},"longitude":{"type":"number"},"accuracy":{"type":["number","null"]},"recordedAt":{"type":"string","format":"date-time"},"ageSeconds":{"type":"integer","minimum":0},"isStale":{"type":"boolean"}}},
+      "ActiveDriverLocationsEnvelope": {"type":"object","required":["success","data","pagination"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"array","items":{"$ref":"#/components/schemas/ActiveDriverLocation"}},"pagination":{"$ref":"#/components/schemas/Pagination"}}},
+      "LocationSuccessEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"$ref":"#/components/schemas/DriverLocation"}}},
+      "NullableLocationEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"oneOf":[{"$ref":"#/components/schemas/DriverLocation"},{"type":"null"}]}}},
+      "LocationHistoryEnvelope": {"type":"object","required":["success","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"object","required":["locations","pagination"],"properties":{"locations":{"type":"array","items":{"$ref":"#/components/schemas/DriverLocation"}},"pagination":{"$ref":"#/components/schemas/Pagination"}}}}},
+      "RealtimeTicketEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"object","required":["ticket","expiresInSeconds"],"properties":{"ticket":{"type":"string","writeOnly":true},"expiresInSeconds":{"const":30}}}}},
+      "StatisticsEnvelope": {"type":"object","required":["success","data"],"properties":{"success":{"const":true},"data":{"type":"object","properties":{"driver":{"type":"object"},"customer":{"type":"object"},"deliveries":{"$ref":"#/components/schemas/StatusCounts"},"total":{"type":"integer"},"pending":{"type":"integer"},"assigned":{"type":"integer"},"pickedUp":{"type":"integer"},"inTransit":{"type":"integer"},"delivered":{"type":"integer"},"cancelled":{"type":"integer"}}}}},
+      "StatusCounts": {"type":"object","properties":{"total":{"type":"integer"},"pending":{"type":"integer"},"assigned":{"type":"integer"},"pickedUp":{"type":"integer"},"inTransit":{"type":"integer"},"delivered":{"type":"integer"},"cancelled":{"type":"integer"}}},
+      "ReadinessEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"object","properties":{"status":{"const":"ready"},"dependencies":{"$ref":"#/components/schemas/DependencyStatus"}}}}},
+      "DependencyStatus": {"type":"object","properties":{"database":{"type":"boolean"},"redis":{"type":"boolean"}}},
       "MetricsEnvelope": {
         "type": "object",
-        "required": ["success", "data"],
+        "required": ["success","data"],
         "properties": {
-          "success": { "const": true },
+          "success": {"const":true},
           "data": {
             "type": "object",
             "properties": {
-              "uptimeSeconds": { "type": "integer" },
-              "requests": {
-                "type": "object",
-                "properties": {
-                  "total": { "type": "integer" },
-                  "errors": { "type": "integer" },
-                  "byStatus": { "type": "object", "additionalProperties": { "type": "integer" } }
-                }
-              },
+              "uptimeSeconds": {"type":"integer"},
+              "requests": {"type":"object","properties":{"total":{"type":"integer"},"errors":{"type":"integer"},"byStatus":{"type":"object","additionalProperties":{"type":"integer"}}}},
               "durationMs": {
                 "type": "object",
                 "description": "Buckets are disjoint ranges: <=50, 51-100, 101-250, 251-500, 501-1000, 1001-2500, 2501-5000, and >5000 milliseconds.",
+                "properties": {"count":{"type":"integer"},"sum":{"type":"number"},"max":{"type":"number"},"buckets":{"type":"object","additionalProperties":{"type":"integer"}}}
+              },
+              "dependencies": {"type":"object","properties":{"database":{"$ref":"#/components/schemas/DependencyObservation"},"redis":{"$ref":"#/components/schemas/DependencyObservation"}}},
+              "realtime": {
+                "type": "object",
+                "description": "Process-local counters without identifiers or coordinates.",
                 "properties": {
-                  "count": { "type": "integer" },
-                  "sum": { "type": "number" },
-                  "max": { "type": "number" },
-                  "buckets": { "type": "object", "additionalProperties": { "type": "integer" } }
+                  "activeConnections": {"type":"integer"},
+                  "rejectedConnections": {"type":"integer"},
+                  "activeSubscriptions": {"type":"integer"},
+                  "pubSubConnections": {"type":"integer"},
+                  "publishedBroadcasts": {"type":"integer"},
+                  "failedBroadcasts": {"type":"integer"},
+                  "gpsIngestions": {"type":"integer"},
+                  "gpsProcessingMs": {"type":"object","properties":{"count":{"type":"integer"},"sum":{"type":"number"},"max":{"type":"number"}}},
+                  "backpressureEvents": {"type":"integer"}
                 }
               },
-              "dependencies": {
+              "dispatch": {
                 "type": "object",
+                "description": "Process-local recommendation counters and aggregate duration without driver or delivery identifiers.",
                 "properties": {
-                  "database": { "$ref": "#/components/schemas/DependencyObservation" },
-                  "redis": { "$ref": "#/components/schemas/DependencyObservation" }
+                  "recommendations": {"type":"integer"},
+                  "failures": {"type":"integer"},
+                  "durationMs": {"type":"object","properties":{"count":{"type":"integer"},"sum":{"type":"number"},"max":{"type":"number"}}}
                 }
               }
             }
           }
         }
       },
-      "DependencyObservation": { "type": "object", "properties": { "status": { "type": "string", "enum": ["unknown", "up", "down"] }, "checkedAt": { "type": ["string", "null"], "format": "date-time" } } },
-      "Notification": { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "userId": { "type": "string", "format": "uuid" }, "deliveryId": { "type": ["string", "null"], "format": "uuid" }, "type": { "type": "string", "enum": ["DELIVERY_UPDATE", "SYSTEM", "ACCOUNT"] }, "title": { "type": "string" }, "message": { "type": "string" }, "isRead": { "type": "boolean" }, "readAt": { "type": ["string", "null"], "format": "date-time" }, "createdAt": { "type": "string", "format": "date-time" } } },
-      "NotificationSuccessEnvelope": { "type": "object", "required": ["success", "message", "data"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "$ref": "#/components/schemas/Notification" } } },
-      "PaginatedNotificationEnvelope": { "type": "object", "required": ["success", "data", "pagination"], "properties": { "success": { "const": true }, "message": { "type": "string" }, "data": { "type": "array", "items": { "$ref": "#/components/schemas/Notification" } }, "pagination": { "$ref": "#/components/schemas/Pagination" } } },
-      "UnreadCountEnvelope": { "type": "object", "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "unreadCount": { "type": "integer" } } } } },
-      "UpdatedCountEnvelope": { "type": "object", "properties": { "success": { "const": true }, "data": { "type": "object", "properties": { "updatedCount": { "type": "integer" } } } } },
-      "RegisterRequest": { "type": "object", "required": ["firstName", "lastName", "email", "password"], "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "email": { "type": "string", "format": "email", "maxLength": 255 }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true }, "phone": { "type": "string", "minLength": 7, "maxLength": 30 } } },
-      "LoginRequest": { "type": "object", "required": ["email", "password"], "properties": { "email": { "type": "string", "format": "email" }, "password": { "type": "string", "minLength": 1, "maxLength": 128, "writeOnly": true } } },
-      "RefreshTokenRequest": { "type": "object", "required": ["refreshToken"], "properties": { "refreshToken": { "type": "string", "minLength": 1, "writeOnly": true } } },
-      "EmailTokenRequest": { "type": "object", "required": ["token"], "properties": { "token": { "type": "string", "minLength": 20, "maxLength": 256, "writeOnly": true } } },
-      "EmailAddressRequest": { "type": "object", "required": ["email"], "properties": { "email": { "type": "string", "format": "email", "maxLength": 255 } } },
-      "PasswordResetRequest": { "type": "object", "required": ["token", "password"], "properties": { "token": { "type": "string", "minLength": 20, "maxLength": 256, "writeOnly": true }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true } } },
-      "CreateDeliveryRequest": { "type": "object", "required": ["recipientName", "recipientPhone", "pickupAddress", "deliveryAddress"], "properties": { "customerId": { "type": "string", "format": "uuid", "description": "Required for ADMIN and SUPER_ADMIN callers; customers may only provide their own ID." }, "recipientName": { "type": "string", "minLength": 2, "maxLength": 150 }, "recipientPhone": { "type": "string", "minLength": 5, "maxLength": 30 }, "pickupAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "pickupLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "pickupLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "deliveryAddress": { "type": "string", "minLength": 5, "maxLength": 500 }, "deliveryLatitude": { "type": "number", "minimum": -90, "maximum": 90 }, "deliveryLongitude": { "type": "number", "minimum": -180, "maximum": 180 }, "packageDescription": { "type": "string", "maxLength": 5000 }, "packageWeight": { "type": "number", "exclusiveMinimum": 0, "maximum": 10000 }, "notes": { "type": "string", "maxLength": 5000 } } },
-      "AssignDriverRequest": { "type": "object", "required": ["driverId"], "properties": { "driverId": { "type": "string", "format": "uuid" } } },
-      "UpdateDeliveryStatusRequest": { "type": "object", "required": ["status"], "properties": { "status": { "type": "string", "enum": ["PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"] } } },
-      "DriverLocationRequest": { "type": "object", "required": ["latitude", "longitude"], "properties": { "latitude": { "type": "number", "minimum": -90, "maximum": 90 }, "longitude": { "type": "number", "minimum": -180, "maximum": 180 }, "accuracy": { "type": "number", "exclusiveMinimum": 0 } } },
-      "CreateStaffUserRequest": { "type": "object", "required": ["firstName", "lastName", "email", "password"], "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "email": { "type": "string", "format": "email", "maxLength": 255 }, "password": { "type": "string", "minLength": 8, "maxLength": 128, "writeOnly": true }, "phone": { "type": "string", "maxLength": 30 } } },
-      "UpdateDriverRequest": { "type": "object", "minProperties": 1, "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "phone": { "type": "string", "maxLength": 30 } } },
-      "UpdateCustomerRequest": { "type": "object", "minProperties": 1, "properties": { "firstName": { "type": "string", "minLength": 2, "maxLength": 100 }, "lastName": { "type": "string", "minLength": 2, "maxLength": 100 }, "phone": { "type": ["string", "null"], "maxLength": 30 } } },
-      "UpdateStatusRequest": { "type": "object", "required": ["status"], "properties": { "status": { "$ref": "#/components/schemas/UserStatus" } } }
+      "DependencyObservation": {"type":"object","properties":{"status":{"type":"string","enum":["unknown","up","down"]},"checkedAt":{"type":["string","null"],"format":"date-time"}}},
+      "Notification": {"type":"object","properties":{"id":{"type":"string","format":"uuid"},"userId":{"type":"string","format":"uuid"},"deliveryId":{"type":["string","null"],"format":"uuid"},"type":{"type":"string","enum":["DELIVERY_UPDATE","SYSTEM","ACCOUNT"]},"title":{"type":"string"},"message":{"type":"string"},"isRead":{"type":"boolean"},"readAt":{"type":["string","null"],"format":"date-time"},"createdAt":{"type":"string","format":"date-time"}}},
+      "NotificationSuccessEnvelope": {"type":"object","required":["success","message","data"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"$ref":"#/components/schemas/Notification"}}},
+      "PaginatedNotificationEnvelope": {"type":"object","required":["success","data","pagination"],"properties":{"success":{"const":true},"message":{"type":"string"},"data":{"type":"array","items":{"$ref":"#/components/schemas/Notification"}},"pagination":{"$ref":"#/components/schemas/Pagination"}}},
+      "UnreadCountEnvelope": {"type":"object","properties":{"success":{"const":true},"data":{"type":"object","properties":{"unreadCount":{"type":"integer"}}}}},
+      "UpdatedCountEnvelope": {"type":"object","properties":{"success":{"const":true},"data":{"type":"object","properties":{"updatedCount":{"type":"integer"}}}}},
+      "RegisterRequest": {"type":"object","required":["firstName","lastName","email","password"],"properties":{"firstName":{"type":"string","minLength":2,"maxLength":100},"lastName":{"type":"string","minLength":2,"maxLength":100},"email":{"type":"string","format":"email","maxLength":255},"password":{"type":"string","minLength":8,"maxLength":128,"writeOnly":true},"phone":{"type":"string","minLength":7,"maxLength":30}}},
+      "LoginRequest": {"type":"object","required":["email","password"],"properties":{"email":{"type":"string","format":"email"},"password":{"type":"string","minLength":1,"maxLength":128,"writeOnly":true}}},
+      "RefreshTokenRequest": {"type":"object","required":["refreshToken"],"properties":{"refreshToken":{"type":"string","minLength":1,"writeOnly":true}}},
+      "EmailTokenRequest": {"type":"object","required":["token"],"properties":{"token":{"type":"string","minLength":20,"maxLength":256,"writeOnly":true}}},
+      "EmailAddressRequest": {"type":"object","required":["email"],"properties":{"email":{"type":"string","format":"email","maxLength":255}}},
+      "PasswordResetRequest": {"type":"object","required":["token","password"],"properties":{"token":{"type":"string","minLength":20,"maxLength":256,"writeOnly":true},"password":{"type":"string","minLength":8,"maxLength":128,"writeOnly":true}}},
+      "CreateDeliveryRequest": {"type":"object","required":["recipientName","recipientPhone","pickupAddress","deliveryAddress"],"properties":{"customerId":{"type":"string","format":"uuid","description":"Required for ADMIN and SUPER_ADMIN callers; customers may only provide their own ID."},"recipientName":{"type":"string","minLength":2,"maxLength":150},"recipientPhone":{"type":"string","minLength":5,"maxLength":30},"pickupAddress":{"type":"string","minLength":5,"maxLength":500},"pickupLatitude":{"type":"number","minimum":-90,"maximum":90},"pickupLongitude":{"type":"number","minimum":-180,"maximum":180},"deliveryAddress":{"type":"string","minLength":5,"maxLength":500},"deliveryLatitude":{"type":"number","minimum":-90,"maximum":90},"deliveryLongitude":{"type":"number","minimum":-180,"maximum":180},"packageDescription":{"type":"string","maxLength":5000},"packageWeight":{"type":"number","exclusiveMinimum":0,"maximum":10000},"notes":{"type":"string","maxLength":5000}}},
+      "AssignDriverRequest": {"type":"object","required":["driverId"],"properties":{"driverId":{"type":"string","format":"uuid"}}},
+      "UpdateDeliveryStatusRequest": {"type":"object","required":["status"],"properties":{"status":{"type":"string","enum":["PICKED_UP","IN_TRANSIT","DELIVERED","CANCELLED"]}}},
+      "DriverLocationRequest": {"type":"object","required":["latitude","longitude"],"properties":{"latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},"accuracy":{"type":"number","exclusiveMinimum":0,"maximum":100000,"description":"Optional reported horizontal accuracy in meters."},"timestamp":{"type":"string","format":"date-time","description":"Optional source timestamp with timezone; server receipt time is used when omitted."}}},
+      "CreateStaffUserRequest": {"type":"object","required":["firstName","lastName","email","password"],"properties":{"firstName":{"type":"string","minLength":2,"maxLength":100},"lastName":{"type":"string","minLength":2,"maxLength":100},"email":{"type":"string","format":"email","maxLength":255},"password":{"type":"string","minLength":8,"maxLength":128,"writeOnly":true},"phone":{"type":"string","maxLength":30}}},
+      "UpdateDriverRequest": {"type":"object","minProperties":1,"properties":{"firstName":{"type":"string","minLength":2,"maxLength":100},"lastName":{"type":"string","minLength":2,"maxLength":100},"phone":{"type":"string","maxLength":30}}},
+      "UpdateCustomerRequest": {"type":"object","minProperties":1,"properties":{"firstName":{"type":"string","minLength":2,"maxLength":100},"lastName":{"type":"string","minLength":2,"maxLength":100},"phone":{"type":["string","null"],"maxLength":30}}},
+      "UpdateStatusRequest": {"type":"object","required":["status"],"properties":{"status":{"$ref":"#/components/schemas/UserStatus"}}},
+      "DispatchCandidate": {"type":"object","required":["driverId","eligible","score","rankingPosition","distanceEstimate","workload","gpsAgeSeconds","explanation"],"properties":{"driverId":{"type":"string","format":"uuid"},"eligible":{"type":"boolean","const":true},"score":{"type":"number","minimum":0,"maximum":100,"description":"Weighted score from 0 to 100."},"rankingPosition":{"type":"integer","minimum":1},"distanceEstimate":{"type":"object","properties":{"meters":{"type":"integer","minimum":0},"method":{"const":"STRAIGHT_LINE_APPROXIMATION"}}},"workload":{"type":"object","properties":{"activeDeliveries":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1}}},"gpsAgeSeconds":{"type":"integer","minimum":0},"explanation":{"type":"string"}}},
+      "DispatchRecommendationEnvelope": {"type":"object","required":["success","data"],"properties":{"success":{"const":true},"data":{"type":"object","required":["deliveryId","advisoryOnly","candidates","pagination"],"properties":{"deliveryId":{"type":"string","format":"uuid"},"advisoryOnly":{"const":true},"candidates":{"type":"array","maxItems":50,"items":{"$ref":"#/components/schemas/DispatchCandidate"}},"pagination":{"type":"object","properties":{"limit":{"type":"integer"},"returned":{"type":"integer"},"hasMore":{"type":"boolean"}}}}}}}
     }
   }
 }

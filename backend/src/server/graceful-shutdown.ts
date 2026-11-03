@@ -6,6 +6,7 @@ export interface GracefulShutdownDependencies {
   timeoutMs: number;
   closeDatabase: () => Promise<unknown>;
   closeQueues?: () => Promise<unknown>;
+  closeRealtime?: () => Promise<unknown>;
   closeRedis: () => Promise<unknown>;
   onExit?: (code: number) => void;
   log?: typeof logger;
@@ -16,6 +17,7 @@ export function createGracefulShutdown({
   timeoutMs,
   closeDatabase,
   closeQueues = async () => undefined,
+  closeRealtime = async () => undefined,
   closeRedis,
   onExit = () => undefined,
   log = logger,
@@ -27,6 +29,14 @@ export function createGracefulShutdown({
 
     shutdownPromise = (async () => {
       log.info("shutdown_started", { signal });
+      let realtimeClosePromise: Promise<unknown>;
+      try {
+        // Calling close synchronously removes the upgrade handler and begins
+        // closing sockets before server.close waits for open connections.
+        realtimeClosePromise = closeRealtime();
+      } catch {
+        realtimeClosePromise = Promise.reject(new Error("Realtime shutdown failed."));
+      }
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -52,6 +62,7 @@ export function createGracefulShutdown({
       const dependencies = await Promise.allSettled([
         closeDatabase(),
         closeQueues(),
+        realtimeClosePromise,
         closeRedis(),
       ]);
       const dependenciesClosed = dependencies.every((result) => result.status === "fulfilled");
@@ -61,7 +72,8 @@ export function createGracefulShutdown({
         log.warn("shutdown_dependency_close_failed", {
           database: dependencies[0].status,
           queues: dependencies[1].status,
-          redis: dependencies[2].status,
+          realtime: dependencies[2].status,
+          redis: dependencies[3].status,
         });
       }
       log.info("shutdown_completed", { signal, timedOut, exitCode });

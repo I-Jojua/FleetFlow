@@ -5,13 +5,16 @@ import { createWorkerShutdown } from "./jobs/worker-shutdown.js";
 import { createOutboxDispatcher } from "./jobs/outbox-dispatcher.js";
 import { QUEUE_NAMES } from "./jobs/job-types.js";
 import { logger } from "./utils/logger.js";
+import { locationRetentionWorker } from "./modules/deliveries/location-retention.js";
 
 const outboxDispatcher = createOutboxDispatcher();
 outboxDispatcher.start();
-const workers = [createDemoWorker(), createEmailWorker(), outboxDispatcher];
+locationRetentionWorker.start();
+const workers = [createDemoWorker(), createEmailWorker(), outboxDispatcher, locationRetentionWorker];
 logger.info("job_worker_started", {
   queues: `${QUEUE_NAMES.demo},${QUEUE_NAMES.email}`,
   outbox: "enabled",
+  gpsLocationRetention: "enabled",
   concurrency: env.JOB_WORKER_CONCURRENCY,
 });
 

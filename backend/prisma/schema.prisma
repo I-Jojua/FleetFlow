@@ -22,6 +22,41 @@ SUSPENDED
 PENDING_VERIFICATION
 }
 
+enum DriverAvailability {
+  AVAILABLE
+  UNAVAILABLE
+  ON_BREAK
+  OFF_DUTY
+  SUSPENDED
+}
+
+enum VehicleType {
+  MOTORCYCLE
+  CAR
+  VAN
+  TRUCK
+  REFRIGERATED_TRUCK
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+}
+
+enum QualificationVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum DriverShiftStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
 enum DeliveryStatus {
 PENDING
 ASSIGNED
@@ -68,6 +103,7 @@ passwordHash String     @map("password_hash") @db.VarChar(255)
 phone        String?    @unique @db.VarChar(30)
 role         UserRole   @default(CUSTOMER)
 status       UserStatus @default(ACTIVE)
+availability DriverAvailability @default(AVAILABLE) @map("availability")
 
 emailVerifiedAt DateTime? @map("email_verified_at")
 lastLoginAt     DateTime? @map("last_login_at")
@@ -83,6 +119,10 @@ deliveryEvents     DeliveryEvent[]
 
 driverLocations DriverLocation[]
   notifications Notification[]
+  vehicleAssignments DriverVehicleAssignment[]
+  qualifications DriverQualification[] @relation("DriverQualifications")
+  verifiedQualifications DriverQualification[] @relation("QualificationVerifier")
+  shifts DriverShift[]
 
 createdAt DateTime @default(now()) @map("created_at")
 updatedAt DateTime @updatedAt @map("updated_at")
@@ -214,6 +254,13 @@ deliveryLongitude Decimal? @map("delivery_longitude") @db.Decimal(10, 7)
 packageDescription String?  @map("package_description") @db.Text
 packageWeight      Decimal? @map("package_weight") @db.Decimal(10, 2)
 
+requiredVehicleType       VehicleType? @map("required_vehicle_type")
+minimumPayloadKg          Decimal?     @map("minimum_payload_kg") @db.Decimal(10, 2)
+minimumVolumeCubicMeters  Decimal?     @map("minimum_volume_cubic_meters") @db.Decimal(10, 3)
+requiresRefrigeratedTransport Boolean  @default(false) @map("requires_refrigerated_transport")
+requiredQualifications    String[]     @default([]) @map("required_qualifications")
+vehicleId                 String?      @map("vehicle_id") @db.Uuid
+
 notes String? @db.Text
 
 assignedAt  DateTime? @map("assigned_at")
@@ -222,6 +269,7 @@ deliveredAt DateTime? @map("delivered_at")
 
 customer User  @relation("CustomerDeliveries", fields: [customerId], references: [id], onDelete: Restrict)
 driver   User? @relation("DriverDeliveries", fields: [driverId], references: [id], onDelete: SetNull)
+vehicle  Vehicle? @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
 
 events          DeliveryEvent[]
 driverLocations DriverLocation[]
@@ -232,9 +280,79 @@ updatedAt DateTime @updatedAt @map("updated_at")
 
 @@index([customerId])
 @@index([driverId])
+@@index([vehicleId])
 @@index([status])
 @@index([createdAt])
 @@map("deliveries")
+}
+
+model Vehicle {
+  id                       String        @id @default(uuid()) @db.Uuid
+  registrationIdentifier   String        @unique @map("registration_identifier") @db.VarChar(32)
+  type                     VehicleType
+  maximumPayloadKg         Decimal       @map("maximum_payload_kg") @db.Decimal(10, 2)
+  maximumVolumeCubicMeters Decimal?      @map("maximum_volume_cubic_meters") @db.Decimal(10, 3)
+  refrigerated             Boolean       @default(false)
+  status                   VehicleStatus @default(ACTIVE)
+  description              String?       @db.VarChar(250)
+  assignments              DriverVehicleAssignment[]
+  deliveries               Delivery[]
+  createdAt                DateTime      @default(now()) @map("created_at")
+  updatedAt                DateTime      @updatedAt @map("updated_at")
+
+  @@index([type, status])
+  @@index([status, maximumPayloadKg])
+  @@map("vehicles")
+}
+
+model DriverVehicleAssignment {
+  id        String    @id @default(uuid()) @db.Uuid
+  driverId  String    @map("driver_id") @db.Uuid
+  vehicleId String    @map("vehicle_id") @db.Uuid
+  startedAt DateTime  @default(now()) @map("started_at") @db.Timestamptz(3)
+  endedAt   DateTime? @map("ended_at") @db.Timestamptz(3)
+  driver    User      @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle   Vehicle   @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+
+  @@index([driverId, endedAt, startedAt])
+  @@index([vehicleId, endedAt, startedAt])
+  @@map("driver_vehicle_assignments")
+}
+
+model DriverQualification {
+  id                  String                          @id @default(uuid()) @db.Uuid
+  driverId            String                          @map("driver_id") @db.Uuid
+  qualificationType   String                          @map("qualification_type") @db.VarChar(60)
+  licenseCategory     String?                         @map("license_category") @db.VarChar(20)
+  issuedAt            DateTime?                       @map("issued_at") @db.Timestamptz(3)
+  expiresAt           DateTime?                       @map("expires_at") @db.Timestamptz(3)
+  verificationStatus  QualificationVerificationStatus @default(PENDING) @map("verification_status")
+  verifiedAt          DateTime?                       @map("verified_at") @db.Timestamptz(3)
+  verifiedById        String?                         @map("verified_by_id") @db.Uuid
+  notes               String?                         @db.VarChar(500)
+  driver              User                            @relation("DriverQualifications", fields: [driverId], references: [id], onDelete: Cascade)
+  verifiedBy          User?                           @relation("QualificationVerifier", fields: [verifiedById], references: [id], onDelete: SetNull)
+  createdAt           DateTime                        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime                        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([driverId, qualificationType, verificationStatus])
+  @@index([verificationStatus, expiresAt])
+  @@map("driver_qualifications")
+}
+
+model DriverShift {
+  id        String            @id @default(uuid()) @db.Uuid
+  driverId  String            @map("driver_id") @db.Uuid
+  startsAt  DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt    DateTime          @map("ends_at") @db.Timestamptz(3)
+  timezone  String            @db.VarChar(64)
+  status    DriverShiftStatus @default(SCHEDULED)
+  driver    User              @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  createdAt DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([driverId, status, startsAt, endsAt])
+  @@map("driver_shifts")
 }
 
 model DeliveryEvent {
@@ -272,6 +390,7 @@ delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: S
 
 @@index([driverId, recordedAt])
 @@index([deliveryId, recordedAt])
+@@index([recordedAt])
 @@map("driver_locations")
 }
 

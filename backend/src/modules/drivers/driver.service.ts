@@ -54,6 +54,7 @@ export async function getAllDrivers(filters: DriverQueryInput) {
   const where = {
     role: "DRIVER" as const,
     ...(status ? { status } : {}),
+    ...(filters.availability ? { availability: filters.availability } : {}),
     ...(search
       ? {
           OR: [
@@ -78,6 +79,7 @@ export async function getAllDrivers(filters: DriverQueryInput) {
         email: true,
         phone: true,
         status: true,
+        availability: true,
         createdAt: true,
         _count: {
           select: {
@@ -118,6 +120,7 @@ export async function getDriverById(id: string) {
       email: true,
       phone: true,
       status: true,
+      availability: true,
       createdAt: true,
       updatedAt: true,
       assignedDeliveries: {
@@ -182,9 +185,14 @@ export async function updateDriverStatus(
   actor?: { userId: string; role: UserRole },
 ) {
   return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ locked: number }>>`
+      WITH lock_result AS (
+        SELECT pg_advisory_xact_lock(hashtextextended(${`dispatch-driver:${id}`}, 0))
+      ) SELECT 1::integer AS locked FROM lock_result
+    `;
     const driver = await tx.user.findFirst({
       where: { id, role: "DRIVER" },
-      select: { id: true, status: true },
+      select: { id: true, status: true, availability: true },
     });
 
     if (!driver) {
@@ -206,13 +214,19 @@ export async function updateDriverStatus(
 
     const updated = await tx.user.update({
       where: { id },
-      data: { status },
+      data: {
+        status,
+        availability: status === "ACTIVE"
+          ? (driver.availability === "SUSPENDED" ? "OFF_DUTY" : driver.availability)
+          : "SUSPENDED",
+      },
       select: {
         id: true,
         firstName: true,
         lastName: true,
         email: true,
         status: true,
+        availability: true,
       },
     });
     await writeAuditEvent(tx, {
@@ -224,6 +238,17 @@ export async function updateDriverStatus(
       metadata: { previousStatus: driver.status, newStatus: updated.status },
       captureIpAddress: true,
     });
+    if (driver.availability !== updated.availability) {
+      await writeAuditEvent(tx, {
+        actor,
+        action: "drivers.availability_update",
+        resourceType: "driver",
+        resourceId: id,
+        outcome: AuditOutcome.SUCCESS,
+        metadata: { previousAvailability: driver.availability, newAvailability: updated.availability },
+        captureIpAddress: true,
+      });
+    }
     return updated;
   }, { isolationLevel: "Serializable" });
 }
@@ -270,6 +295,66 @@ export async function getDriverStatistics(id: string) {
       inTransit,
       delivered,
       cancelled,
+    },
+  };
+}
+
+export async function getActiveDriverLocations(page: number, limit: number) {
+  const skip = (page - 1) * limit;
+  const rows = await prisma.$queryRaw<Array<{
+    driverId: string;
+    deliveryId: string;
+    latitude: number;
+    longitude: number;
+    accuracy: number | null;
+    recordedAt: Date;
+    total: number;
+  }>>`
+    WITH latest_active_locations AS (
+      SELECT DISTINCT ON (location.driver_id)
+        location.driver_id AS "driverId",
+        location.delivery_id AS "deliveryId",
+        location.latitude,
+        location.longitude,
+        location.accuracy,
+        location.recorded_at AS "recordedAt"
+      FROM driver_locations AS location
+      INNER JOIN deliveries AS delivery ON delivery.id = location.delivery_id
+      INNER JOIN users AS driver ON driver.id = location.driver_id
+      WHERE delivery.status IN ('ASSIGNED', 'PICKED_UP', 'IN_TRANSIT')
+        AND driver.role = 'DRIVER'
+        AND driver.status = 'ACTIVE'
+      ORDER BY location.driver_id, location.recorded_at DESC, location.id DESC
+    ),
+    selected_page AS (
+      SELECT * FROM latest_active_locations
+      ORDER BY "recordedAt" DESC, "driverId" ASC
+      LIMIT ${limit} OFFSET ${skip}
+    )
+    SELECT selected_page.*, (SELECT COUNT(*)::int FROM latest_active_locations) AS total
+    FROM selected_page
+    ORDER BY "recordedAt" DESC, "driverId" ASC
+  `;
+
+  const total = rows[0]?.total ?? await prisma.$queryRaw<Array<{ total: number }>>`
+    SELECT COUNT(DISTINCT location.driver_id)::int AS total
+    FROM driver_locations AS location
+    INNER JOIN deliveries AS delivery ON delivery.id = location.delivery_id
+    INNER JOIN users AS driver ON driver.id = location.driver_id
+    WHERE delivery.status IN ('ASSIGNED', 'PICKED_UP', 'IN_TRANSIT')
+      AND driver.role = 'DRIVER'
+      AND driver.status = 'ACTIVE'
+  `.then((result) => result[0]?.total ?? 0);
+
+  return {
+    locations: rows.map(({ total: _total, ...location }) => location),
+    pagination: {
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      hasNextPage: page * limit < total,
+      hasPreviousPage: page > 1,
     },
   };
 }

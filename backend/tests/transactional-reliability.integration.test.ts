@@ -21,6 +21,7 @@ if (integrationUrl) {
 
 const prefix = `transactional-reliability-${randomUUID()}`;
 const userIds: string[] = [];
+const vehicleIds: string[] = [];
 const deliveryIds: string[] = [];
 let prisma: (typeof import("../src/config/prisma.js"))["prisma"] | undefined;
 let env: (typeof import("../src/config/env.js"))["env"];
@@ -38,6 +39,12 @@ async function createUser(role: UserRole) {
     },
   });
   userIds.push(user.id);
+  if (role === "DRIVER") {
+    const vehicle = await prisma!.vehicle.create({ data: { registrationIdentifier: `T-${randomUUID().replaceAll("-", "").slice(0, 20)}`, type: "VAN", maximumPayloadKg: 5_000, maximumVolumeCubicMeters: 25, refrigerated: true } });
+    vehicleIds.push(vehicle.id);
+    await prisma!.driverVehicleAssignment.create({ data: { driverId: user.id, vehicleId: vehicle.id } });
+    await prisma!.driverShift.create({ data: { driverId: user.id, startsAt: new Date(Date.now() - 3_600_000), endsAt: new Date(Date.now() + 86_400_000), timezone: "Etc/UTC", status: "ACTIVE" } });
+  }
   return user;
 }
 
@@ -115,9 +122,11 @@ after(async () => {
     if (tokens.length) await prisma.outboxEvent.deleteMany({ where: { dedupeKey: { in: tokens.map((token) => `auth-email:${token.id}`) } } });
     if (deliveryIds.length) await prisma.delivery.deleteMany({ where: { id: { in: deliveryIds } } });
     if (userIds.length) {
+      await prisma.driverVehicleAssignment.deleteMany({ where: { driverId: { in: userIds } } });
       await prisma.auditLog.deleteMany({ where: { actorUserId: { in: userIds } } });
       await prisma.user.deleteMany({ where: { id: { in: userIds } } });
     }
+    if (vehicleIds.length) await prisma.vehicle.deleteMany({ where: { id: { in: vehicleIds } } });
   } finally {
     if (fetchOriginal) globalThis.fetch = fetchOriginal;
     const [{ closeRedisConnection }, { closeQueueRegistry }] = await Promise.all([

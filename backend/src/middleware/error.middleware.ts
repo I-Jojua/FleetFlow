@@ -7,6 +7,9 @@ const notFoundCodes = new Set([
   "DELIVERY_NOT_FOUND",
   "DRIVER_NOT_FOUND",
   "DRIVER_NOT_FOUND_OR_INACTIVE",
+  "VEHICLE_NOT_FOUND",
+  "QUALIFICATION_NOT_FOUND",
+  "DRIVER_SHIFT_NOT_FOUND",
 ]);
 
 function getErrorCode(error: unknown): string | undefined {
@@ -85,13 +88,60 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, next) => {
     code === "INVALID_STATUS_TRANSITION" ||
     code === "DELIVERY_STATE_CONFLICT" ||
     code === "DELIVERY_CANNOT_BE_ASSIGNED" ||
+    code === "DRIVER_WORKLOAD_LIMIT_REACHED" ||
+    code === "DRIVER_GPS_STALE_FOR_DISPATCH" ||
     code === "DRIVER_HAS_ACTIVE_DELIVERIES" ||
-    code === "IDEMPOTENCY_RESULT_NOT_FOUND"
+    code === "DRIVER_UNAVAILABLE" ||
+    code === "DRIVER_NO_ACTIVE_SHIFT" ||
+    code === "DRIVER_MISSING_REQUIRED_QUALIFICATION" ||
+    code === "DRIVER_NO_SUITABLE_VEHICLE" ||
+    code === "INACTIVE_DRIVER_CANNOT_BE_AVAILABLE" ||
+    code === "INVALID_AVAILABILITY_TRANSITION" ||
+    code === "VEHICLE_NOT_ACTIVE" ||
+    code === "VEHICLE_ALREADY_ASSIGNED" ||
+    code === "VEHICLE_ASSIGNMENT_NOT_FOUND" ||
+    code === "VEHICLE_HAS_ACTIVE_DELIVERIES" ||
+    code === "VEHICLE_ASSIGNMENT_CHANGED" ||
+    code === "DRIVER_SHIFT_OVERLAP" ||
+    code === "DRIVER_SHIFT_NOT_EDITABLE" ||
+    code === "INVALID_SHIFT_TRANSITION" ||
+    code === "SHIFT_NOT_CURRENT" ||
+    code === "SHIFT_NOT_FINISHED" ||
+    code === "QUALIFICATION_ALREADY_EXISTS" ||
+    code === "INVALID_QUALIFICATION_TRANSITION" ||
+    code === "DELIVERY_REQUIREMENTS_NOT_EDITABLE" ||
+    code === "IDEMPOTENCY_RESULT_NOT_FOUND" ||
+    code === "LOCATION_OUT_OF_ORDER" ||
+    code === "LOCATION_STALE" ||
+    code === "DELIVERY_NOT_ACTIVE"
   ) {
     res.status(409).json({
       success: false,
       code: "CONFLICT",
       message: "The request conflicts with the current resource state.",
+    });
+    return;
+  }
+
+  if (code === "LOCATION_INVALID" || code === "LOCATION_INVALID_TIMESTAMP" || code === "LOCATION_TIMESTAMP_IN_FUTURE") {
+    res.status(400).json({
+      success: false,
+      code: "INVALID_LOCATION",
+      message: "The location data or timestamp is invalid.",
+    });
+    return;
+  }
+
+  if (code === "DRIVER_LOCATION_REQUIRED_FOR_DISPATCH") {
+    res.status(400).json({ success: false, code, message: "Pickup coordinates are required for driver recommendations." });
+    return;
+  }
+
+  if (code === "REALTIME_UNAVAILABLE") {
+    res.status(503).json({
+      success: false,
+      code: "REALTIME_UNAVAILABLE",
+      message: "Realtime connections are temporarily unavailable.",
     });
     return;
   }

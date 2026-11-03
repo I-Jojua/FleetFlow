@@ -46,6 +46,9 @@ test("OpenAPI is valid JSON 3.1 and every local reference resolves", async () =>
   const source = await readFile(resolve(process.cwd(), "docs/openapi.json"), "utf8");
   const document = JSON.parse(source);
   assert.equal(document.openapi, "3.1.0");
+  const declaredPaths = [...source.matchAll(/^\s+"(\/[^" ]*)"\s*:/gm)].map((match) => match[1]);
+  assert.equal(new Set(declaredPaths).size, declaredPaths.length, "OpenAPI paths must not contain duplicate JSON keys");
+  assert.equal(declaredPaths.length, Object.keys(document.paths).length, "Every declared path must survive JSON parsing");
 
   const visit = (value: unknown) => {
     if (!value || typeof value !== "object") return;
@@ -78,25 +81,34 @@ test("OpenAPI documents the current mounted module paths and key authorization b
   const paths = document.paths;
   const requiredPaths = [
     "/", "/api/v1/health", "/api/v1/health/ready", "/api/v1/health/metrics",
-    "/api/v1/docs", "/api/v1/docs/openapi.json", "/api/v1/docs/swagger-initializer.js",
+    "/api/v1/docs", "/api/v1/docs/openapi.json", "/api/v1/docs/swagger-initializer.js", "/api/v1/realtime/ticket",
     "/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout", "/api/v1/auth/me",
     "/api/v1/auth/verify-email", "/api/v1/auth/resend-verification", "/api/v1/auth/password-reset/request", "/api/v1/auth/password-reset/confirm",
     "/api/v1/deliveries/track/{trackingCode}", "/api/v1/deliveries", "/api/v1/deliveries/my",
     "/api/v1/deliveries/assigned", "/api/v1/deliveries/statistics", "/api/v1/deliveries/{id}/assign",
     "/api/v1/deliveries/{id}", "/api/v1/deliveries/{id}/status", "/api/v1/deliveries/{id}/location", "/api/v1/deliveries/{id}/location/history",
-    "/api/v1/drivers", "/api/v1/drivers/{id}", "/api/v1/drivers/{id}/status", "/api/v1/drivers/{id}/statistics",
+    "/api/v1/deliveries/{id}/requirements",
+    "/api/v1/dispatch/deliveries/{id}/recommendations",
+    "/api/v1/drivers", "/api/v1/drivers/active-locations", "/api/v1/drivers/{id}", "/api/v1/drivers/{id}/status", "/api/v1/drivers/{id}/statistics",
+    "/api/v1/drivers/{id}/availability", "/api/v1/drivers/{id}/qualifications", "/api/v1/drivers/{id}/qualifications/{qualificationId}/verification",
+    "/api/v1/drivers/{id}/shifts", "/api/v1/drivers/{id}/shifts/{shiftId}", "/api/v1/drivers/{id}/shifts/{shiftId}/status",
+    "/api/v1/vehicles", "/api/v1/vehicles/{id}", "/api/v1/vehicles/{id}/status", "/api/v1/vehicles/{id}/assignment",
     "/api/v1/customers", "/api/v1/customers/{id}", "/api/v1/customers/{id}/status", "/api/v1/customers/{id}/statistics",
     "/api/v1/notifications", "/api/v1/notifications/unread-count", "/api/v1/notifications/read-all", "/api/v1/notifications/{id}/read",
     "/api/v1/audit-logs",
   ];
   for (const path of requiredPaths) assert.ok(paths[path], `Missing documented route ${path}`);
   assert.deepEqual(Object.keys(paths).sort(), requiredPaths.sort(), "OpenAPI paths must match the current mounted API surface");
+  assert.equal(document["x-realtime"].protocol, "WebSocket");
+  assert.match(document["x-realtime"].reconnection, /new ticket/i);
 
   assert.deepEqual(paths["/api/v1/deliveries/track/{trackingCode}"].get.security, []);
   assert.deepEqual(paths["/api/v1/auth/me"].get.security ?? document.security, [{ BearerAuth: [] }]);
   assert.deepEqual(paths["/api/v1/health/metrics"].get.security, [{ MetricsBearerAuth: [] }]);
   assert.ok(paths["/api/v1/deliveries/{id}/status"].patch["x-required-roles"]);
   assert.deepEqual(paths["/api/v1/audit-logs"].get["x-required-roles"], ["ADMIN", "SUPER_ADMIN"]);
+  assert.deepEqual(paths["/api/v1/drivers/{id}/availability"].patch["x-required-roles"], ["ADMIN", "SUPER_ADMIN"]);
+  assert.deepEqual(paths["/api/v1/vehicles"].get["x-required-roles"], ["ADMIN", "SUPER_ADMIN", "DISPATCHER"]);
 });
 
 test("authorization matrix documents each current role and ownership boundary", async () => {
@@ -156,6 +168,31 @@ test("metrics track counts, errors, status distribution, disjoint duration bucke
   assert.equal(snapshot.dependencies.database.status, "up");
   assert.equal(snapshot.dependencies.redis.status, "down");
   assert.equal(snapshot.dependencies.redis.checkedAt === null, false);
+});
+
+test("realtime metrics expose operational counters without user or location labels", () => {
+  const recorder = createMetricsRecorder();
+  recorder.changeActiveConnections(3);
+  recorder.recordRejectedConnection();
+  recorder.changeActiveSubscriptions(2);
+  recorder.changePubSubConnections(1);
+  recorder.recordPublishedBroadcast();
+  recorder.recordFailedBroadcast();
+  recorder.recordGpsIngestion(12.5);
+  recorder.recordBackpressureEvent();
+  const snapshot = recorder.snapshot();
+  assert.deepEqual(snapshot.realtime, {
+    activeConnections: 3,
+    rejectedConnections: 1,
+    activeSubscriptions: 2,
+    pubSubConnections: 1,
+    publishedBroadcasts: 1,
+    failedBroadcasts: 1,
+    gpsIngestions: 1,
+    gpsProcessingMs: { count: 1, sum: 12.5, max: 12.5 },
+    backpressureEvents: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(snapshot), /latitude|longitude|driverId|token/i);
 });
 
 test("request context adds correlation IDs to service logs without logging sensitive values", async () => {

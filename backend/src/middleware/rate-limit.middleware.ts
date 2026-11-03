@@ -197,6 +197,13 @@ export const RATE_LIMIT_POLICIES = {
   passwordResetConfirm: { key: "password-reset-confirm", windowMs: 15 * 60 * 1000, maxRequests: 10 },
   publicTracking: { key: "public-tracking", windowMs: 15 * 60 * 1000, maxRequests: 60 },
   auditRead: { key: "audit-read", windowMs: 60 * 1000, maxRequests: 60 },
+  driverLocationUpdate: { key: "driver-location-update", windowMs: 60 * 1000, maxRequests: 60 },
+  locationRead: { key: "location-read", windowMs: 60 * 1000, maxRequests: 120 },
+  activeDriverLocations: { key: "active-driver-locations", windowMs: 60 * 1000, maxRequests: 30 },
+  realtimeTicket: { key: "realtime-ticket", windowMs: 60 * 1000, maxRequests: 20 },
+  dispatchRecommendations: { key: "dispatch-recommendations", windowMs: 60 * 1000, maxRequests: 30 },
+  workforceRead: { key: "workforce-read", windowMs: 60 * 1000, maxRequests: 120 },
+  workforceWrite: { key: "workforce-write", windowMs: 60 * 1000, maxRequests: 30 },
 } as const;
 
 export const authRateLimiters = {
@@ -214,3 +221,10 @@ export const publicTrackingRateLimiter = createRateLimiter(
 );
 
 export const auditReadRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.auditRead);
+export const driverLocationUpdateRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.driverLocationUpdate);
+export const locationReadRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.locationRead);
+export const activeDriverLocationsRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.activeDriverLocations);
+export const realtimeTicketRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.realtimeTicket);
+export const dispatchRecommendationsRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.dispatchRecommendations);
+export const workforceReadRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.workforceRead);
+export const workforceWriteRateLimiter = createRateLimiter(RATE_LIMIT_POLICIES.workforceWrite);

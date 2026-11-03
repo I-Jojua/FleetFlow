@@ -112,6 +112,7 @@ test("graceful shutdown waits for server close and runs only once", async () => 
   let closeCalls = 0;
   let dbCloseCalls = 0;
   let queueCloseCalls = 0;
+  let realtimeCloseCalls = 0;
   let redisCloseCalls = 0;
   let exitCode: number | undefined;
   const server = {
@@ -123,6 +124,7 @@ test("graceful shutdown waits for server close and runs only once", async () => 
     timeoutMs: 1_000,
     closeDatabase: async () => { dbCloseCalls += 1; },
     closeQueues: async () => { queueCloseCalls += 1; },
+    closeRealtime: async () => { realtimeCloseCalls += 1; },
     closeRedis: async () => { redisCloseCalls += 1; },
     onExit: (code) => { exitCode = code; },
     log: { info() {}, warn() {}, error() {} },
@@ -136,6 +138,7 @@ test("graceful shutdown waits for server close and runs only once", async () => 
   assert.equal(closeCalls, 1);
   assert.equal(dbCloseCalls, 1);
   assert.equal(queueCloseCalls, 1);
+  assert.equal(realtimeCloseCalls, 1);
   assert.equal(redisCloseCalls, 1);
   assert.equal(exitCode, 0);
 });

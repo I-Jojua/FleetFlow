@@ -36,6 +36,13 @@ function mockTransaction(
 ) {
   replaceMethod(t, prisma, "$transaction", async (callback: (tx: object) => unknown) => {
     const tx = transactionClient as Record<string, any>;
+    tx.$queryRaw ??= async () => [];
+    tx.delivery ??= {};
+    tx.delivery.count ??= async () => 0;
+    tx.user ??= { findFirst: async () => ({ id: driverId, availability: "AVAILABLE" }) };
+    tx.driverShift ??= { findFirst: async () => ({ id: "test-shift" }) };
+    tx.driverVehicleAssignment ??= { findFirst: async () => ({ vehicleId: "test-vehicle", vehicle: { id: "test-vehicle", status: "ACTIVE", type: "VAN", maximumPayloadKg: 1000, maximumVolumeCubicMeters: 10, refrigerated: false } }) };
+    tx.driverQualification ??= { findMany: async () => [] };
     tx.auditLog ??= { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) };
     return callback(tx);
   });
@@ -71,6 +78,11 @@ function deliveryRecord(overrides: Record<string, unknown> = {}) {
     deliveryLongitude: null,
     packageDescription: null,
     packageWeight: null,
+    requiredVehicleType: null,
+    minimumPayloadKg: null,
+    minimumVolumeCubicMeters: null,
+    requiresRefrigeratedTransport: false,
+    requiredQualifications: [],
     notes: null,
     assignedAt: null,
     pickedUpAt: null,
@@ -130,7 +142,7 @@ test("driver assignment sends a notification to the assigned driver", async (t) 
     },
     deliveryEvent: { create: async () => ({}) },
     user: {
-      findFirst: async () => ({ id: driverId, firstName: "Test", lastName: "Driver" }),
+      findFirst: async () => ({ id: driverId, firstName: "Test", lastName: "Driver", availability: "AVAILABLE" }),
     },
   });
 

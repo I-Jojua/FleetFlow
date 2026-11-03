@@ -8,8 +8,15 @@ import { createNotificationsBestEffort } from "../notifications/notification.ser
 import { sendSlackAlertBestEffort } from "../notifications/slack.service";
 import { isStaffRole } from "../auth/authorization.js";
 import { runIdempotently } from "../idempotency/idempotency.service.js";
+import { publishDriverLocationUpdate } from "../realtime/realtime.gateway.js";
+import { getRequestId } from "../../observability/request-context.js";
+import { metrics } from "../../observability/metrics.js";
+import { performance } from "node:perf_hooks";
+import { revalidateDriverForAssignment } from "../dispatch/dispatch.service.js";
 import type {
   CreateDeliveryInput,
+  UpdateDriverLocationInput,
+  UpdateDeliveryRequirementsInput,
 } from "./delivery.validation";
 
 function generateTrackingCode(): string {
@@ -51,6 +58,11 @@ export async function createDelivery(
         deliveryLongitude: data.deliveryLongitude,
         packageDescription: data.packageDescription,
         packageWeight: data.packageWeight,
+        requiredVehicleType: data.requiredVehicleType,
+        minimumPayloadKg: data.minimumPayloadKg,
+        minimumVolumeCubicMeters: data.minimumVolumeCubicMeters,
+        requiresRefrigeratedTransport: data.requiresRefrigeratedTransport ?? false,
+        requiredQualifications: [...new Set(data.requiredQualifications ?? [])],
         notes: data.notes,
       },
     });
@@ -192,6 +204,39 @@ export async function getDeliveryByIdForActor(
   });
 }
 
+export async function updateDeliveryRequirements(
+  deliveryId: string,
+  data: UpdateDeliveryRequirementsInput,
+  actorId: string,
+  actorRole: UserRole,
+) {
+  if (!isStaffRole(actorRole)) throw new Error("DELIVERY_FORBIDDEN");
+  return prisma.$transaction(async (tx) => {
+    const delivery = await tx.delivery.findUnique({ where: { id: deliveryId } });
+    if (!delivery) throw new Error("DELIVERY_NOT_FOUND");
+    if (delivery.status !== "PENDING") throw new Error("DELIVERY_REQUIREMENTS_NOT_EDITABLE");
+    const updated = await tx.delivery.update({
+      where: { id: deliveryId },
+      data: {
+        ...data,
+        requiredQualifications: data.requiredQualifications
+          ? [...new Set(data.requiredQualifications)]
+          : undefined,
+      },
+    });
+    await writeAuditEvent(tx, {
+      actor: { userId: actorId, role: actorRole },
+      action: "deliveries.requirements_update",
+      resourceType: "delivery",
+      resourceId: deliveryId,
+      outcome: AuditOutcome.SUCCESS,
+      metadata: { changedFields: Object.keys(data) },
+      captureIpAddress: true,
+    });
+    return updated;
+  }, { isolationLevel: "Serializable" });
+}
+
 export async function assignDriver(
   deliveryId: string,
   driverId: string,
@@ -242,6 +287,8 @@ export async function assignDriver(
       };
     }
 
+    const eligibility = await revalidateDriverForAssignment(tx, driverId, delivery);
+
     const assignment = await tx.delivery.updateMany({
       where: {
         id: deliveryId,
@@ -250,6 +297,7 @@ export async function assignDriver(
       },
       data: {
         driverId,
+        vehicleId: eligibility.vehicleId,
         status: "ASSIGNED",
         assignedAt: new Date(),
       },
@@ -258,6 +306,7 @@ export async function assignDriver(
     if (assignment.count !== 1) {
       throw new Error("DELIVERY_STATE_CONFLICT");
     }
+
 
     const updated = await tx.delivery.findUnique({
       where: { id: deliveryId },
@@ -691,45 +740,60 @@ export async function searchDeliveries(
 export const updateDriverLocation = async (
   deliveryId: string,
   driverId: string,
-  data: {
-    latitude: number;
-    longitude: number;
-    accuracy?: number;
-  }
+  data: UpdateDriverLocationInput
 ) => {
-  const delivery = await prisma.delivery.findUnique({
-    where: {
-      id: deliveryId,
-    },
-    select: {
-      id: true,
-      driverId: true,
-      status: true,
-    },
+  const startedAt = performance.now();
+  if (!Number.isFinite(data.latitude) || data.latitude < -90 || data.latitude > 90 ||
+      !Number.isFinite(data.longitude) || data.longitude < -180 || data.longitude > 180 ||
+      (data.accuracy !== undefined && (!Number.isFinite(data.accuracy) || data.accuracy <= 0 || data.accuracy > 100_000))) {
+    throw new Error("LOCATION_INVALID");
+  }
+
+  const requestedRecordedAt = data.timestamp ? new Date(data.timestamp) : new Date();
+  if (!Number.isFinite(requestedRecordedAt.getTime())) throw new Error("LOCATION_INVALID_TIMESTAMP");
+  const now = Date.now();
+  const oldestAllowed = now - env.GPS_MAX_AGE_SECONDS * 1_000;
+  const newestAllowed = now + env.GPS_MAX_FUTURE_SKEW_SECONDS * 1_000;
+  if (requestedRecordedAt.getTime() < oldestAllowed) throw new Error("LOCATION_STALE");
+  if (requestedRecordedAt.getTime() > newestAllowed) throw new Error("LOCATION_TIMESTAMP_IN_FUTURE");
+
+  const location = await prisma.$transaction(async (tx) => {
+    // Serialize by driver so samples across multiple assignments cannot move
+    // a driver's location clock backwards under concurrent requests.
+    await tx.$queryRaw`SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtextextended(${`gps:${driverId}`}, 0))) AS gps_lock`;
+    await tx.$queryRaw`SELECT 1 FROM deliveries WHERE id = ${deliveryId}::uuid FOR UPDATE`;
+
+    const delivery = await tx.delivery.findUnique({
+      where: { id: deliveryId },
+      select: { id: true, driverId: true, status: true },
+    });
+    if (!delivery || delivery.driverId !== driverId) throw new Error("DELIVERY_NOT_FOUND");
+    if (!["PICKED_UP", "IN_TRANSIT"].includes(delivery.status)) throw new Error("DELIVERY_NOT_ACTIVE");
+
+    const latest = await tx.driverLocation.findFirst({
+      where: { driverId },
+      orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
+      select: { recordedAt: true },
+    });
+    let recordedAt = requestedRecordedAt;
+    if (latest && recordedAt.getTime() <= latest.recordedAt.getTime()) {
+      if (data.timestamp) throw new Error("LOCATION_OUT_OF_ORDER");
+      recordedAt = new Date(latest.recordedAt.getTime() + 1);
+    }
+
+    return tx.driverLocation.create({
+      data: {
+        driverId,
+        deliveryId,
+        latitude: data.latitude,
+        longitude: data.longitude,
+        accuracy: data.accuracy,
+        recordedAt,
+      },
+    });
   });
-
-  if (!delivery) {
-    throw new Error("DELIVERY_NOT_FOUND");
-  }
-
-  if (delivery.driverId !== driverId) {
-    throw new Error("DELIVERY_NOT_FOUND");
-  }
-
-  if (!["PICKED_UP", "IN_TRANSIT"].includes(delivery.status)) {
-    throw new Error("DELIVERY_NOT_ACTIVE");
-  }
-
-  const location = await prisma.driverLocation.create({
-    data: {
-      driverId,
-      deliveryId,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      accuracy: data.accuracy,
-    },
-  });
-
+  metrics.recordGpsIngestion(performance.now() - startedAt);
+  await publishDriverLocationUpdate({ ...location, requestId: getRequestId() });
   return location;
 };
 
@@ -751,9 +815,7 @@ export const getDriverLocation = async (deliveryId: string) => {
     where: {
       deliveryId,
     },
-    orderBy: {
-      recordedAt: "desc",
-    },
+    orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
     select: {
       latitude: true,
       longitude: true,
@@ -770,6 +832,7 @@ export const getDriverLocationHistory = async (
   deliveryId: string,
   page = 1,
   limit = 50,
+  range: { from?: Date; to?: Date } = {},
 ) => {
   const delivery = await prisma.delivery.findUnique({
     where: {
@@ -790,10 +853,14 @@ export const getDriverLocationHistory = async (
     prisma.driverLocation.findMany({
       where: {
         deliveryId,
+        ...(range.from || range.to ? {
+          recordedAt: {
+            ...(range.from ? { gte: range.from } : {}),
+            ...(range.to ? { lte: range.to } : {}),
+          },
+        } : {}),
       },
-      orderBy: {
-        recordedAt: "desc",
-      },
+      orderBy: [{ recordedAt: "desc" }, { id: "desc" }],
       skip,
       take: limit,
       select: {
@@ -809,6 +876,12 @@ export const getDriverLocationHistory = async (
     prisma.driverLocation.count({
       where: {
         deliveryId,
+        ...(range.from || range.to ? {
+          recordedAt: {
+            ...(range.from ? { gte: range.from } : {}),
+            ...(range.to ? { lte: range.to } : {}),
+          },
+        } : {}),
       },
     }),
   ]);

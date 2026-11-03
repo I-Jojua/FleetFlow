@@ -10,8 +10,13 @@ import { validateUuidParam } from "../src/middleware/request-validation.js";
 import * as deliveryController from "../src/modules/deliveries/delivery.controller.js";
 import * as deliveryService from "../src/modules/deliveries/delivery.service.js";
 import { deliveryQuerySchema, locationHistoryQuerySchema } from "../src/modules/deliveries/delivery.validation.js";
+import { updateDriverLocationSchema } from "../src/modules/deliveries/delivery.validation.js";
+import { activeDriverLocationsQuerySchema } from "../src/modules/drivers/driver.validation.js";
+import { RATE_LIMIT_POLICIES } from "../src/middleware/rate-limit.middleware.js";
+import { createLocationRetentionWorker } from "../src/modules/deliveries/location-retention.js";
 import * as driverService from "../src/modules/drivers/driver.service.js";
 import { notificationQuerySchema } from "../src/modules/notifications/notification.validation.js";
+import { validateEnvironment } from "../src/config/env.js";
 
 const customerId = "00000000-0000-4000-8000-000000000001";
 const driverId = "00000000-0000-4000-8000-000000000002";
@@ -43,6 +48,13 @@ function mockTransaction(
   ) => {
     if (capture) capture.options = options;
     const tx = transactionClient as Record<string, any>;
+    tx.$queryRaw ??= async () => [];
+    tx.delivery ??= {};
+    tx.delivery.count ??= async () => 0;
+    tx.user ??= { findFirst: async () => ({ id: driverId, availability: "AVAILABLE" }) };
+    tx.driverShift ??= { findFirst: async () => ({ id: "test-shift" }) };
+    tx.driverVehicleAssignment ??= { findFirst: async () => ({ vehicleId: "test-vehicle", vehicle: { id: "test-vehicle", status: "ACTIVE", type: "VAN", maximumPayloadKg: 1000, maximumVolumeCubicMeters: 10, refrigerated: false } }) };
+    tx.driverQualification ??= { findMany: async () => [] };
     tx.auditLog ??= { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) };
     return callback(tx);
   });
@@ -73,6 +85,11 @@ function delivery(overrides: Record<string, unknown> = {}) {
     deliveryLongitude: null,
     packageDescription: null,
     packageWeight: null,
+    requiredVehicleType: null,
+    minimumPayloadKg: null,
+    minimumVolumeCubicMeters: null,
+    requiresRefrigeratedTransport: false,
+    requiredQualifications: [],
     notes: null,
     assignedAt: null,
     pickedUpAt: null,
@@ -138,6 +155,78 @@ test("all delivery, location, and notification pagination schemas reject non-pos
     page: 2,
     limit: 50,
   });
+  assert.equal(locationHistoryQuerySchema.safeParse({ from: "2026-01-02T00:00:00Z", to: "2026-01-01T00:00:00Z" }).success, false);
+  assert.deepEqual(activeDriverLocationsQuerySchema.parse({}), { page: 1, limit: 25 });
+});
+
+test("GPS input validates ranges, timestamp format, and applies dedicated rate-limit policies", () => {
+  assert.equal(updateDriverLocationSchema.safeParse({
+    latitude: 40.7,
+    longitude: -74,
+    accuracy: 12,
+    timestamp: "2026-11-03T12:00:00Z",
+  }).success, true);
+  assert.equal(updateDriverLocationSchema.safeParse({ latitude: 90.1, longitude: 0 }).success, false);
+  assert.equal(updateDriverLocationSchema.safeParse({ latitude: 0, longitude: 180.1 }).success, false);
+  assert.equal(updateDriverLocationSchema.safeParse({ latitude: 0, longitude: 0, accuracy: 100_001 }).success, false);
+  assert.equal(updateDriverLocationSchema.safeParse({ latitude: "", longitude: 0 }).success, false);
+  assert.equal(updateDriverLocationSchema.safeParse({ latitude: 0, longitude: 0, timestamp: "not-a-time" }).success, false);
+  assert.deepEqual(RATE_LIMIT_POLICIES.driverLocationUpdate, {
+    key: "driver-location-update", windowMs: 60_000, maxRequests: 60,
+  });
+  assert.deepEqual(RATE_LIMIT_POLICIES.activeDriverLocations, {
+    key: "active-driver-locations", windowMs: 60_000, maxRequests: 30,
+  });
+  assert.equal(locationHistoryQuerySchema.safeParse({
+    from: "2026-01-01T10:00:00-14:00",
+    to: "2026-01-01T23:30:00Z",
+  }).success, false);
+  assert.equal(locationHistoryQuerySchema.safeParse({
+    from: "2026-01-01T00:00:00Z",
+    to: "2026-04-02T00:00:00Z",
+  }).success, false);
+});
+
+test("realtime resource-limit environment values are bounded and have practical defaults", () => {
+  const config = validateEnvironment({
+    NODE_ENV: "test",
+    JWT_ACCESS_SECRET: "test_access_secret_that_is_long_enough",
+    JWT_REFRESH_SECRET: "test_refresh_secret_that_is_long_enough",
+  });
+  assert.equal(config.REALTIME_MAX_CONNECTIONS, 1_000);
+  assert.equal(config.REALTIME_MAX_CONNECTIONS_PER_IP, 50);
+  assert.equal(config.REALTIME_MAX_BUFFERED_BYTES, 1_048_576);
+  assert.equal(config.REALTIME_PUBLISH_TIMEOUT_MS, 750);
+  assert.throws(() => validateEnvironment({
+    NODE_ENV: "test",
+    JWT_ACCESS_SECRET: "test_access_secret_that_is_long_enough",
+    JWT_REFRESH_SECRET: "test_refresh_secret_that_is_long_enough",
+    REALTIME_MAX_CONNECTIONS: "0",
+  }), /Invalid environment variables: REALTIME_MAX_CONNECTIONS/);
+});
+
+test("GPS retention worker prunes only before the configured cutoff and coalesces overlapping runs", async () => {
+  let calls = 0;
+  let release: ((count: number) => void) | undefined;
+  let cutoff: Date | undefined;
+  const worker = createLocationRetentionWorker({
+    deleteBefore: (value) => {
+      calls += 1;
+      cutoff = value;
+      return new Promise<number>((resolve) => { release = resolve; });
+    },
+    retentionDays: 30,
+    now: () => new Date("2026-11-03T12:00:00Z"),
+    log: { info() {}, warn() {}, error() {}, debug() {} } as never,
+  });
+
+  const first = worker.runOnce();
+  const second = worker.runOnce();
+  assert.equal(calls, 1);
+  assert.equal(cutoff?.toISOString(), "2026-10-04T12:00:00.000Z");
+  release?.(4);
+  await Promise.all([first, second]);
+  await worker.close();
 });
 
 test("UUID route parameter helper returns a consistent 400 for malformed IDs", () => {
@@ -278,7 +367,7 @@ test("driver assignment notifies the previous driver when reassigning", async (t
         return { count: 1 };
       },
     },
-    user: { findFirst: async () => ({ id: driverId, firstName: "New", lastName: "Driver" }) },
+    user: { findFirst: async () => ({ id: driverId, firstName: "New", lastName: "Driver", availability: "AVAILABLE" }) },
     deliveryEvent: { create: async () => ({}) },
   }, transactionCapture);
   replaceMethod(t, prisma.notification, "create", async (args: { data: { userId: string; title: string } }) => {
@@ -425,7 +514,7 @@ test("concurrent driver assignments cannot overwrite one another", async (t) => 
         return { count: compareAndSetCalls === 1 ? 1 : 0 };
       },
     },
-    user: { findFirst: async () => ({ id: driverId, firstName: "Test", lastName: "Driver" }) },
+    user: { findFirst: async () => ({ id: driverId, firstName: "Test", lastName: "Driver", availability: "AVAILABLE" }) },
     deliveryEvent: { create: async () => { eventCalls += 1; return {}; } },
   });
   replaceMethod(t, prisma.notification, "create", async () => {
@@ -511,7 +600,7 @@ test("driver cannot be deactivated while assigned work is active", async (t) => 
   let updateCalls = 0;
   mockTransaction(t, {
     user: {
-      findFirst: async () => ({ id: driverId }),
+        findFirst: async () => ({ id: driverId, status: "ACTIVE", availability: "AVAILABLE" }),
       update: async () => { updateCalls += 1; return { id: driverId, status: "INACTIVE" }; },
     },
     delivery: { count: async () => 2 },
@@ -535,8 +624,9 @@ test("driver can be deactivated when no active deliveries remain", async (t) => 
     transactionOptions = options;
     return callback({
       auditLog: { create: async ({ data }: { data: unknown }) => ({ id: "audit-test-record", ...data as object }) },
+      $queryRaw: async () => [],
       user: {
-        findFirst: async () => ({ id: driverId }),
+        findFirst: async () => ({ id: driverId, status: "ACTIVE", availability: "AVAILABLE" }),
         update: async () => ({ id: driverId, status: "INACTIVE" }),
       },
       delivery: {

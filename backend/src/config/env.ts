@@ -41,6 +41,20 @@ const envSchema = z.object({
   OUTBOX_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(25),
   OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(50).default(8),
   OUTBOX_BACKOFF_BASE_MS: z.coerce.number().int().min(100).max(300_000).default(1_000),
+  GPS_MAX_AGE_SECONDS: z.coerce.number().int().min(30).max(86_400).default(300),
+  GPS_MAX_FUTURE_SKEW_SECONDS: z.coerce.number().int().min(0).max(300).default(30),
+  GPS_STALE_AFTER_SECONDS: z.coerce.number().int().min(10).max(86_400).default(120),
+  DISPATCH_MAX_ACTIVE_DELIVERIES: z.coerce.number().int().min(1).max(100).default(5),
+  DISPATCH_DISTANCE_WEIGHT: z.coerce.number().int().min(0).max(100).default(60),
+  DISPATCH_WORKLOAD_WEIGHT: z.coerce.number().int().min(0).max(100).default(25),
+  DISPATCH_FRESHNESS_WEIGHT: z.coerce.number().int().min(0).max(100).default(15),
+  DISPATCH_VEHICLE_FIT_WEIGHT: z.coerce.number().int().min(0).max(100).default(0),
+  DISPATCH_DISTANCE_NORMALIZATION_KM: z.coerce.number().positive().max(1_000).default(100),
+  GPS_LOCATION_RETENTION_DAYS: z.coerce.number().int().min(1).max(3_650).default(90),
+  REALTIME_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(100_000).default(1_000),
+  REALTIME_MAX_CONNECTIONS_PER_IP: z.coerce.number().int().min(1).max(10_000).default(50),
+  REALTIME_MAX_BUFFERED_BYTES: z.coerce.number().int().min(1_024).max(16_777_216).default(1_048_576),
+  REALTIME_PUBLISH_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(750),
   EMAIL_PROVIDER: z.enum(["console", "resend"]).default("console"),
   EMAIL_API_KEY: z.string().min(1).optional(),
   EMAIL_FROM: z.string().email().default("no-reply@example.test"),
@@ -79,7 +93,9 @@ const envSchema = z.object({
 
   JWT_ACCESS_SECRET: z.string().min(32).default(DEFAULT_ACCESS_SECRET),
   JWT_REFRESH_SECRET: z.string().min(32).default(DEFAULT_REFRESH_SECRET),
-});
+}).refine((values) =>
+  values.DISPATCH_DISTANCE_WEIGHT + values.DISPATCH_WORKLOAD_WEIGHT + values.DISPATCH_FRESHNESS_WEIGHT + values.DISPATCH_VEHICLE_FIT_WEIGHT === 100,
+{ message: "Dispatch scoring weights must sum to 100.", path: ["DISPATCH_DISTANCE_WEIGHT"] });
 
 export type AppEnvironment = Omit<z.infer<typeof envSchema>, "API_DOCS_ENABLED"> & {
   API_DOCS_ENABLED: boolean;

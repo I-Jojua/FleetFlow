@@ -24,6 +24,22 @@ The application parses configuration in `src/config/env.ts`. It does not log env
 | `OUTBOX_BATCH_SIZE` | `25` | Maximum events claimed per dispatcher pass, integer 1–500. |
 | `OUTBOX_MAX_ATTEMPTS` | `8` | Maximum enqueue attempts before an outbox event is marked permanently failed. |
 | `OUTBOX_BACKOFF_BASE_MS` | `1000` | Initial delay for exponential outbox retries, integer 100–300000 ms. |
+| `GPS_MAX_AGE_SECONDS` | `300` | Reject submitted GPS timestamps older than this limit, integer 30–86400 seconds. |
+| `GPS_MAX_FUTURE_SKEW_SECONDS` | `30` | Maximum accepted device clock skew into the future, integer 0–300 seconds. |
+| `GPS_STALE_AFTER_SECONDS` | `120` | A last location older than this is marked stale in API results, integer 10–86400 seconds. |
+| `DISPATCH_MAX_ACTIVE_DELIVERIES` | `5` | Maximum concurrent `ASSIGNED`, `PICKED_UP`, or `IN_TRANSIT` deliveries for a driver to be recommended or newly assigned, integer 1–100. |
+| `DISPATCH_DISTANCE_WEIGHT` | `60` | Integer score weight 0–100. Together with workload, freshness, and vehicle-fit weights, must sum to 100. |
+| `DISPATCH_WORKLOAD_WEIGHT` | `25` | Integer score weight 0–100 for active delivery load. |
+| `DISPATCH_FRESHNESS_WEIGHT` | `15` | Integer score weight 0–100 for GPS freshness. |
+| `DISPATCH_VEHICLE_FIT_WEIGHT` | `0` | Integer score weight 0–100 for capacity utilization fit. Default 0 preserves the P6.1 ranking; all four dispatch weights must sum to 100. |
+| `DISPATCH_DISTANCE_NORMALIZATION_KM` | `100` | Distance at which the straight-line distance component reaches zero, positive number up to 1000 km. This is score normalization, not an eligibility radius or road distance. |
+| `GPS_LOCATION_RETENTION_DAYS` | `90` | Location history age after which the worker removes GPS rows, integer 1–3650 days. |
+| `REALTIME_MAX_CONNECTIONS` | `1000` | Maximum established plus pending WebSocket connections per API process, integer 1–100000. Excess upgrades receive HTTP 503. |
+| `REALTIME_MAX_CONNECTIONS_PER_IP` | `50` | Maximum established plus pending WebSocket connections per direct peer IP per process, integer 1–10000. Excess upgrades receive HTTP 429. |
+| `REALTIME_MAX_BUFFERED_BYTES` | `1048576` | Maximum outbound WebSocket buffering per client before the slow consumer is disconnected; integer 1024–16777216 bytes. |
+| `REALTIME_PUBLISH_TIMEOUT_MS` | `750` | Bound on transient Redis location publish latency after PostgreSQL persistence, integer 100–10000 ms. A timeout drops that live event; clients recover current state/history from REST. |
+
+Realtime WebSocket ticket lifetime is fixed at 30 seconds and tickets are one-use Redis keys. The ticket endpoint and GPS operations use the existing `REDIS_URL`; no separate real-time credential is required. A dedicated Redis Pub/Sub connection is used so the rate-limit client remains available for regular commands. Limits are per API process, so deployments behind a load balancer should also enforce global connection limits at the proxy. The per-IP limit uses the TCP peer address. Location-history date ranges cannot exceed the configured retention period. Realtime metrics are process-local and available only through the existing protected metrics route.
 | `EMAIL_PROVIDER` | `console` | `resend` sends through the Resend API. `console` is development-only and explicitly reports that messages were not delivered. |
 | `EMAIL_API_KEY` | Unset | Resend API key. Required in production; never logged. |
 | `EMAIL_FROM` | `no-reply@example.test` | Valid sender email address; production must explicitly configure a provider-verified sender. |

@@ -18,6 +18,11 @@ This document reflects the routes mounted by `src/app.ts` and the role middlewar
 | List assigned deliveries | No | No | Own assignments | No | No | No |
 | Read delivery detail / GPS / GPS history | No | Own customer deliveries | Own assigned deliveries | All | All | All |
 | Assign or reassign delivery driver | No | No | No | All eligible deliveries | All eligible deliveries | All eligible deliveries |
+| `GET /api/v1/dispatch/deliveries/{id}/recommendations` | No | No | No | Eligible delivery recommendations | Eligible delivery recommendations | Eligible delivery recommendations |
+| List driver vehicles, shifts, and qualifications | No | No | No | Read all | Read all | Read all |
+| Manage vehicles, driver shifts, availability, and qualifications | No | No | No | No | All | All |
+| Verify driver qualifications | No | No | No | No | All | All |
+| Update delivery transport requirements | No | No | No | All | All | All |
 | Update delivery status | No | Own pending delivery may be cancelled | Own assigned delivery, subject to lifecycle | All | All | All |
 | Submit driver GPS location | No | No | Own assigned active delivery | No | No | No |
 | Create driver or update driver/profile status | No | No | No | No | All drivers | All drivers |
@@ -29,6 +34,8 @@ This document reflects the routes mounted by `src/app.ts` and the role middlewar
 | Mutate or delete audit logs | No | No | No | No | No | No |
 
 “All” is restricted to the module's resource type and implemented filters. Driver assignment additionally requires an active user with the DRIVER role. Driver GPS writes require that the caller is the currently assigned driver and delivery status is `PICKED_UP` or `IN_TRANSIT`. Delivery status changes also enforce lifecycle transitions and customer/driver ownership in the service transaction.
+
+Dispatch recommendations are advisory and limited to ADMIN, SUPER_ADMIN, and DISPATCHER. They can only be requested for an existing PENDING or ASSIGNED delivery with pickup coordinates. Candidates need an active DRIVER account, AVAILABLE workforce state, a current active shift, a current active vehicle meeting delivery capacity/type/refrigeration needs, verified and unexpired required qualifications, fresh GPS, and workload under the configured cap. Missing vehicle, shift, qualification, or GPS data excludes a candidate. The API returns driver IDs and operational score details only; it does not return profile, contact, address, or coordinate values. Assignment revalidates account, availability, workload, shift, qualification, and vehicle eligibility under a shared per-driver lock and does not rely on earlier recommendation results. If pickup coordinates are missing, recommendations are unavailable and a direct staff assignment does not require GPS freshness.
 
 ## Resource ownership and IDOR controls
 

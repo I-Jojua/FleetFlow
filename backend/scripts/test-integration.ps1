@@ -23,6 +23,10 @@ try {
   $env:EMAIL_FROM = "integration@example.test"
   $env:APP_BASE_URL = "http://127.0.0.1:5173"
   $env:EMAIL_TOKEN_ENCRYPTION_KEY = "0000000000000000000000000000000000000000000000000000000000000000"
+  $env:GPS_MAX_AGE_SECONDS = "300"
+  $env:GPS_MAX_FUTURE_SKEW_SECONDS = "30"
+  $env:GPS_STALE_AFTER_SECONDS = "120"
+  $env:GPS_LOCATION_RETENTION_DAYS = "90"
 
   docker compose -p $composeProject -f $composeFile up -d --wait postgres-integration redis-integration
   if ($LASTEXITCODE -ne 0) { throw "Could not start isolated integration PostgreSQL." }
@@ -31,7 +35,7 @@ try {
   npx.cmd prisma migrate deploy --config prisma7.config.ts
   if ($LASTEXITCODE -ne 0) { throw "Could not apply existing migrations to isolated integration PostgreSQL." }
 
-  npx.cmd tsx --test tests/postgres.integration.test.ts tests/redis.integration.test.ts tests/jobs.integration.test.ts tests/email.integration.test.ts tests/auth-recovery.integration.test.ts tests/audit.integration.test.ts tests/authorization.integration.test.ts tests/transactional-reliability.integration.test.ts
+  npx.cmd tsx --test --test-concurrency=1 tests/postgres.integration.test.ts tests/redis.integration.test.ts tests/jobs.integration.test.ts tests/email.integration.test.ts tests/auth-recovery.integration.test.ts tests/audit.integration.test.ts tests/authorization.integration.test.ts tests/transactional-reliability.integration.test.ts tests/realtime.integration.test.ts
   if ($LASTEXITCODE -ne 0) { throw "PostgreSQL integration tests failed." }
 }
 finally {

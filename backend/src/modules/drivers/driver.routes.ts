@@ -2,6 +2,7 @@
 import * as controller from "./driver.controller";
 import { authenticate } from "../auth/auth.middleware";
 import { authorizeRoles } from "../auth/role.middleware";
+import { activeDriverLocationsRateLimiter } from "../../middleware/rate-limit.middleware.js";
 
 const router = Router();
 
@@ -11,6 +12,13 @@ router.post(
   "/",
   authorizeRoles("ADMIN", "SUPER_ADMIN"),
   controller.createDriver,
+);
+
+router.get(
+  "/active-locations",
+  authorizeRoles("ADMIN", "SUPER_ADMIN", "DISPATCHER"),
+  activeDriverLocationsRateLimiter,
+  controller.getActiveDriverLocations,
 );
 
 router.get(

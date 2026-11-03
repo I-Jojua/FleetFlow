@@ -24,8 +24,14 @@ export const updateDriverStatusSchema = z.object({
 export const driverQuerySchema = z.object({
   search: z.string().trim().optional(),
   status: z.enum(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"]).optional(),
+  availability: z.enum(["AVAILABLE", "UNAVAILABLE", "ON_BREAK", "OFF_DUTY", "SUSPENDED"]).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(10),
+});
+
+export const activeDriverLocationsQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
 });
 
 export type CreateDriverInput = z.infer<typeof createDriverSchema>;

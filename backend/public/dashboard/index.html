@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f4f6f8">
+    <meta name="description" content="FleetFlow operations dashboard for deliveries, drivers, vehicles, tracking, and dispatch.">
+    <title>FleetFlow — Operations overview</title>
+    <link rel="stylesheet" href="/dashboard/styles.css">
+    <script src="/dashboard/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+        <a class="brand" href="#overview" aria-label="FleetFlow home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 40" fill="none"><path d="M8 11.5h17.5c4.1 0 6.5 2.7 6.5 6.5s-2.4 6.5-6.5 6.5H15" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="m18 18-7 6.5 7 6.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="30.5" cy="29.5" r="3.5" fill="currentColor"/></svg>
+          </span>
+          <span class="brand-copy"><strong>FleetFlow</strong><small>OPERATIONS</small></span>
+        </a>
+
+        <div class="side-label">WORKSPACE</div>
+        <nav class="side-nav">
+          <a class="nav-link active" href="#overview"><span class="nav-icon">▦</span><span>Overview</span></a>
+          <a class="nav-link" href="#drivers"><span class="nav-icon">♙</span><span>Drivers</span><span class="nav-lock">↗</span></a>
+          <a class="nav-link" href="#vehicles"><span class="nav-icon">▰</span><span>Vehicles</span><span class="nav-lock">↗</span></a>
+          <a class="nav-link" href="#deliveries"><span class="nav-icon">▤</span><span>Deliveries</span></a>
+        </nav>
+
+        <div class="side-label tools-label">OPERATIONS</div>
+        <nav class="side-nav">
+          <a class="nav-link" href="#tracking"><span class="nav-icon">⌖</span><span>Live tracking</span><span class="live-dot"></span></a>
+          <a class="nav-link" href="#dispatch"><span class="nav-icon">✳</span><span>Intelligent dispatch</span></a>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="side-health">
+            <span class="health-orb" id="sidebar-health-orb"></span>
+            <div><strong id="sidebar-health-text">Checking system</strong><small>API CONNECTION</small></div>
+            <span class="health-chevron">›</span>
+          </div>
+          <a class="docs-link" href="/api/v1/docs/" target="_blank" rel="noopener noreferrer">
+            <span class="docs-icon">⌘</span><span>API documentation</span><span class="external-icon">↗</span>
+          </a>
+          <div class="sidebar-foot">FLEETFLOW PLATFORM <span>v1.0</span></div>
+        </div>
+      </aside>
+
+      <main class="main-content" id="overview">
+        <header class="topbar">
+          <button class="mobile-menu" id="mobile-menu" aria-label="Open navigation" aria-expanded="false"><span></span><span></span><span></span></button>
+          <div class="breadcrumbs"><span>Workspace</span><span class="crumb-divider">/</span><strong>Overview</strong></div>
+          <div class="topbar-actions">
+            <div class="clock-wrap"><span class="clock-dot"></span><span id="local-clock">--:--</span><span id="local-date">Loading date</span></div>
+            <span class="top-separator"></span>
+            <button class="sign-in-button" id="open-login" type="button">
+              <span class="user-avatar" id="avatar-mark">↗</span><span id="auth-button-label">Sign in</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="content-wrap">
+          <section class="welcome-row">
+            <div>
+              <div class="eyebrow"><span class="eyebrow-line"></span> FLEET OPERATIONS</div>
+              <h1>Good day<span class="period">.</span> <span id="welcome-name">Let’s move things forward.</span></h1>
+              <p class="page-intro">Your operation, at a glance. Keep every delivery moving with confidence.</p>
+            </div>
+            <div class="updated-note"><span class="refresh-glyph">↻</span> Live overview <span class="updated-separator">·</span> <span id="last-updated">Waiting for data</span></div>
+          </section>
+
+          <section class="hero-panel" aria-labelledby="hero-heading">
+            <div class="hero-copy">
+              <div class="hero-kicker"><span class="hero-kicker-dot"></span> CONNECTED OPERATIONS</div>
+              <h2 id="hero-heading">Move your fleet<br><em>with clarity.</em></h2>
+              <p>One clear view of your delivery network, the people behind it, and what needs attention next.</p>
+              <div class="hero-actions">
+                <a class="button button-lime" href="#deliveries">View delivery flow <span>→</span></a>
+                <button class="button button-glass" id="hero-login" type="button">Access workspace <span>↗</span></button>
+              </div>
+            </div>
+            <div class="hero-visual" aria-hidden="true">
+              <div class="visual-grid"></div>
+              <svg class="route-art" viewBox="0 0 570 270" fill="none">
+                <path d="M35 201C99 201 92 88 175 88C255 88 233 206 320 206C405 206 392 52 487 52" stroke="rgba(195,224,116,.22)" stroke-width="2" stroke-dasharray="5 8"/>
+                <path d="M35 201C99 201 92 88 175 88C255 88 233 206 320 206C405 206 392 52 487 52" stroke="#C4E86D" stroke-width="2.5" stroke-dasharray="94 530" stroke-linecap="round"/>
+                <circle cx="35" cy="201" r="7" fill="#C4E86D"/><circle cx="35" cy="201" r="15" stroke="#C4E86D" stroke-opacity=".2"/>
+                <circle cx="175" cy="88" r="7" fill="#F1F5F9"/><circle cx="175" cy="88" r="14" stroke="#F1F5F9" stroke-opacity=".17"/>
+                <circle cx="320" cy="206" r="7" fill="#F1F5F9"/><circle cx="320" cy="206" r="14" stroke="#F1F5F9" stroke-opacity=".17"/>
+                <circle cx="487" cy="52" r="8" fill="#C4E86D"/><circle cx="487" cy="52" r="18" stroke="#C4E86D" stroke-opacity=".2"/>
+                <g transform="translate(109 137) rotate(-14)"><rect width="42" height="29" rx="8" fill="#F6F8F5"/><path d="M8 9h16l7 7v6H8V9Z" fill="#18352B"/><circle cx="14" cy="23" r="3.2" fill="#C4E86D"/><circle cx="27" cy="23" r="3.2" fill="#C4E86D"/></g>
+                <g transform="translate(385 106) rotate(-26)"><rect width="42" height="29" rx="8" fill="#F6F8F5"/><path d="M8 9h16l7 7v6H8V9Z" fill="#18352B"/><circle cx="14" cy="23" r="3.2" fill="#C4E86D"/><circle cx="27" cy="23" r="3.2" fill="#C4E86D"/></g>
+              </svg>
+              <div class="visual-chip chip-left"><span class="chip-icon">↗</span><span><small>ROUTE NETWORK</small><strong>Connected</strong></span></div>
+              <div class="visual-chip chip-right"><span class="chip-pulse"></span><span><small>LIVE SIGNAL</small><strong>Ready to track</strong></span></div>
+              <span class="visual-caption">A clearer route from pickup to delivery</span>
+            </div>
+          </section>
+
+          <section class="metrics-grid" aria-label="Fleet overview metrics">
+            <article class="metric-card metric-green" data-metric-card="drivers">
+              <div class="metric-top"><span class="metric-label">Active drivers</span><span class="metric-icon icon-green">♙</span></div>
+              <div class="metric-value" id="driver-count"><span class="skeleton"></span></div>
+              <div class="metric-foot"><span class="metric-tag" id="driver-status">Protected overview</span><span class="metric-note">Driver network</span></div>
+            </article>
+            <article class="metric-card metric-blue" data-metric-card="vehicles">
+              <div class="metric-top"><span class="metric-label">Active vehicles</span><span class="metric-icon icon-blue">▰</span></div>
+              <div class="metric-value" id="vehicle-count"><span class="skeleton"></span></div>
+              <div class="metric-foot"><span class="metric-tag" id="vehicle-status">Protected overview</span><span class="metric-note">Fleet capacity</span></div>
+            </article>
+            <article class="metric-card metric-amber" data-metric-card="transit">
+              <div class="metric-top"><span class="metric-label">In transit</span><span class="metric-icon icon-amber">↗</span></div>
+              <div class="metric-value" id="transit-count"><span class="skeleton"></span></div>
+              <div class="metric-foot"><span class="metric-tag" id="transit-status">Sign in for live totals</span><span class="metric-note">Active deliveries</span></div>
+            </article>
+            <article class="metric-card metric-violet" data-metric-card="deliveries">
+              <div class="metric-top"><span class="metric-label">All deliveries</span><span class="metric-icon icon-violet">▤</span></div>
+              <div class="metric-value" id="delivery-count"><span class="skeleton"></span></div>
+              <div class="metric-foot"><span class="metric-tag" id="delivery-status">Sign in for live totals</span><span class="metric-note">Across all stages</span></div>
+            </article>
+          </section>
+
+          <section class="overview-grid">
+            <article class="panel delivery-panel" id="deliveries">
+              <div class="panel-heading">
+                <div><div class="section-kicker">DELIVERY OVERVIEW</div><h3>Delivery flow</h3></div>
+                <span class="panel-period" id="delivery-period">Current totals</span>
+              </div>
+              <div class="flow-summary"><div><strong id="flow-total">—</strong><span>tracked deliveries</span></div><div class="flow-legend"><span><i class="legend-dot dot-complete"></i>Completed</span><span><i class="legend-dot dot-active"></i>Active</span></div></div>
+              <div class="flow-chart" id="flow-chart" aria-live="polite">
+                <div class="flow-state" id="flow-state"><span class="state-spinner"></span><span>Loading delivery totals…</span></div>
+              </div>
+              <div class="panel-bottom"><span id="delivery-updated">Counts come from the delivery API</span><a href="/api/v1/docs/" target="_blank" rel="noopener noreferrer">API details <span>↗</span></a></div>
+            </article>
+
+            <article class="panel health-panel" id="api-health">
+              <div class="panel-heading">
+                <div><div class="section-kicker">PLATFORM STATUS</div><h3>System health</h3></div>
+                <span class="health-pill" id="health-pill"><i></i><span>Checking</span></span>
+              </div>
+              <div class="health-score-wrap">
+                <div class="health-ring" id="health-ring"><span class="ring-inner"><strong id="health-score">—</strong><small>STATUS</small></span></div>
+                <div class="health-copy"><strong id="health-headline">Connecting to FleetFlow</strong><span id="health-description">Checking the API and its dependencies.</span></div>
+              </div>
+              <div class="dependency-list">
+                <div class="dependency-row"><span class="dependency-name"><i class="dependency-icon db-icon">▦</i> API service</span><span class="dependency-state" id="api-state"><i></i> Checking</span></div>
+                <div class="dependency-row"><span class="dependency-name"><i class="dependency-icon">▤</i> PostgreSQL</span><span class="dependency-state" id="database-state"><i></i> Checking</span></div>
+                <div class="dependency-row"><span class="dependency-name"><i class="dependency-icon redis-icon">◈</i> Redis</span><span class="dependency-state" id="redis-state"><i></i> Checking</span></div>
+              </div>
+              <div class="health-foot"><span class="health-refresh-icon">↻</span><span id="health-checked-at">Auto-checking every 30 seconds</span></div>
+            </article>
+          </section>
+
+          <section class="capability-grid">
+            <article class="capability-card drivers-card" id="drivers">
+              <div class="capability-art driver-art" aria-hidden="true"><span class="art-circle circle-one"></span><span class="art-circle circle-two"></span><span class="art-person">♙</span><span class="art-route-line"></span></div>
+              <div class="capability-content"><div class="section-kicker">PEOPLE POWERING DELIVERY</div><h3>Drivers overview</h3><p id="drivers-copy">Sign in with an authorized staff account to see the driver network overview.</p><div class="capability-meta"><span class="status-mark status-protected"></span><span id="drivers-meta">Protected fleet data</span></div><button class="text-action protected-action" data-requires-auth type="button">Open driver workspace <span>→</span></button></div>
+            </article>
+            <article class="capability-card vehicles-card" id="vehicles">
+              <div class="capability-art vehicle-art" aria-hidden="true"><span class="road-line road-one"></span><span class="road-line road-two"></span><span class="vehicle-illustration"><i></i><b></b><em></em></span><span class="vehicle-glow"></span></div>
+              <div class="capability-content"><div class="section-kicker">CAPACITY IN MOTION</div><h3>Vehicles overview</h3><p id="vehicles-copy">See active fleet capacity and assignment availability in one place.</p><div class="capability-meta"><span class="status-mark status-protected"></span><span id="vehicles-meta">Protected fleet data</span></div><button class="text-action protected-action" data-requires-auth type="button">Open vehicle workspace <span>→</span></button></div>
+            </article>
+          </section>
+
+          <section class="operations-grid">
+            <article class="operation-card tracking-card" id="tracking">
+              <div class="operation-icon tracking-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M19 10.2c0 5.4-7 11-7 11s-7-5.6-7-11a7 7 0 1 1 14 0Z" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="10" r="2.4" stroke="currentColor" stroke-width="1.7"/></svg></div>
+              <div class="operation-body"><div class="operation-title-row"><div><div class="section-kicker">REAL-TIME VISIBILITY</div><h3>Tracking that stays in sync</h3></div><span class="feature-badge"><i></i> WebSocket ready</span></div>
+                <p>Location updates are persisted and shared securely. Sign in to use one-time realtime tickets and owner-scoped delivery tracking.</p>
+                <div class="tracking-preview"><div class="preview-map"><span class="map-road road-a"></span><span class="map-road road-b"></span><span class="map-road road-c"></span><span class="map-pin pin-a"></span><span class="map-pin pin-b"></span><span class="map-route"></span><span class="map-label label-a">PICKUP</span><span class="map-label label-b">DESTINATION</span></div><div class="preview-details"><div class="preview-status"><span class="pulse-dot"></span><span>Live updates</span><span class="lock-tag">AUTH REQUIRED</span></div><strong>Private by design</strong><small>Driver coordinates are never shown on this public overview.</small></div></div>
+                <button class="button button-dark" data-requires-auth type="button">Access tracking <span>→</span></button>
+              </div>
+            </article>
+            <article class="operation-card dispatch-card" id="dispatch">
+              <div class="dispatch-top"><div class="operation-icon dispatch-icon"><svg viewBox="0 0 24 24" fill="none"><path d="m12 2 1.8 6.2L20 6l-2.2 6 6.2 2-6.2 1.8L20 22l-6.2-2.2L12 26l-1.8-6.2L4 22l2.2-6L0 14l6.2-1.8L4 6l6.2 2.2L12 2Z" transform="translate(0 -2) scale(.92)" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></div><span class="dispatch-label">INTELLIGENT DISPATCH</span></div>
+              <h3>Better matches.<br><em>Less guesswork.</em></h3><p>Advisory recommendations weigh distance, workload, GPS freshness, shift coverage, qualifications and vehicle fit.</p>
+              <div class="dispatch-checks"><span><i>✓</i> Eligibility rechecked at assignment</span><span><i>✓</i> Recommendations never auto-assign</span><span><i>✓</i> Straight-line distance only</span></div>
+              <a class="button button-lime dispatch-button" href="/api/v1/docs/" target="_blank" rel="noopener noreferrer">Explore dispatch API <span>↗</span></a>
+              <div class="dispatch-decoration" aria-hidden="true"><span></span><span></span><span></span><i>F</i></div>
+            </article>
+          </section>
+
+          <footer class="page-footer"><a class="footer-brand" href="#overview"><span class="mini-brand-mark">F</span> FleetFlow</a><span>Operations with a clearer view.</span><div><a href="/api/v1/docs/" target="_blank" rel="noopener noreferrer">API docs</a><span>·</span><a href="/api/v1/docs/openapi.json" target="_blank" rel="noopener noreferrer">OpenAPI</a><span>·</span><span id="footer-health">API status checking</span></div></footer>
+        </div>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="login-modal" hidden>
+      <section class="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <button class="modal-close" id="close-login" type="button" aria-label="Close sign in">×</button>
+        <div class="modal-brand-mark"><svg viewBox="0 0 40 40" fill="none"><path d="M8 11.5h17.5c4.1 0 6.5 2.7 6.5 6.5s-2.4 6.5-6.5 6.5H15" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="m18 18-7 6.5 7 6.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+        <div class="section-kicker">FLEETFLOW WORKSPACE</div><h2 id="login-title">Welcome back.</h2><p class="modal-intro">Sign in with your FleetFlow account to view protected operations data.</p>
+        <form id="login-form">
+          <label for="login-email">Email address</label><input id="login-email" name="email" type="email" autocomplete="username" required maxlength="255" placeholder="you@company.com">
+          <label for="login-password">Password</label><div class="password-wrap"><input id="login-password" name="password" type="password" autocomplete="current-password" required maxlength="128" placeholder="Enter your password"><button type="button" id="toggle-password" aria-label="Show password">Show</button></div>
+          <div class="form-error" id="login-error" role="alert" hidden></div>
+          <button class="button button-dark modal-submit" id="login-submit" type="submit">Sign in securely <span>→</span></button>
+        </form>
+        <div class="modal-security"><span>⌑</span> Tokens stay in memory and clear when you sign out or close this page.</div>
+        <a class="modal-docs" href="/api/v1/docs/" target="_blank" rel="noopener noreferrer">Need account help? Open API docs <span>↗</span></a>
+      </section>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

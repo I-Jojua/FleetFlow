@@ -7,15 +7,26 @@ import {
   deliveryQuerySchema,
   updateDriverLocationSchema,
   locationHistoryQuerySchema,
+  updateDeliveryRequirementsSchema,
 } from "./delivery.validation.js";
 import { validateUuidParam } from "../../middleware/request-validation.js";
 import { isStaffRole } from "../auth/authorization.js";
 import { validateIdempotencyKey } from "../idempotency/idempotency.service.js";
+import { env } from "../../config/env.js";
 
 // --- დამხმარე ფუნქციები (Helpers) ---
 
 function validateDeliveryId(req: Request, res: Response): string | null {
   return validateUuidParam(req, res, "Delivery");
+}
+
+function locationWithFreshness<T extends { recordedAt: Date }>(location: T) {
+  const ageSeconds = Math.max(0, (Date.now() - location.recordedAt.getTime()) / 1_000);
+  return {
+    ...location,
+    ageSeconds: Math.floor(ageSeconds),
+    isStale: ageSeconds > env.GPS_STALE_AFTER_SECONDS,
+  };
 }
 
 function readIdempotencyKey(req: Request, res: Response): string | undefined | null {
@@ -165,6 +176,22 @@ export async function assignDriver(
       message: "Driver assigned successfully",
       data: delivery,
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateDeliveryRequirements(req: Request, res: Response, next: NextFunction) {
+  try {
+    const deliveryId = validateDeliveryId(req, res);
+    if (!deliveryId) return;
+    const data = await deliveryService.updateDeliveryRequirements(
+      deliveryId,
+      updateDeliveryRequirementsSchema.parse(req.body),
+      req.user!.id,
+      req.user!.role,
+    );
+    return res.status(200).json({ success: true, data });
   } catch (error) {
     next(error);
   }
@@ -329,7 +356,7 @@ export async function updateMyLocation(
     return res.status(201).json({
       success: true,
       message: "Driver location updated successfully.",
-      data: location,
+      data: locationWithFreshness(location),
     });
   } catch (error) {
     next(error);
@@ -361,7 +388,7 @@ export async function getDriverLocation(
       message: location
         ? "Driver location retrieved successfully."
         : "Driver location is not available yet.",
-      data: location,
+      data: location ? locationWithFreshness(location) : null,
     });
   } catch (error) {
     next(error);
@@ -389,7 +416,7 @@ export async function getDriverLocationHistory(
         })),
       });
     }
-    const { page, limit } = parsedPagination.data;
+    const { page, limit, from, to } = parsedPagination.data;
 
     const delivery = await deliveryService.getDeliveryByIdForActor(deliveryId, req.user!);
 
@@ -404,6 +431,10 @@ export async function getDriverLocationHistory(
       deliveryId,
       page,
       limit,
+      {
+        ...(from ? { from: new Date(from) } : {}),
+        ...(to ? { to: new Date(to) } : {}),
+      },
     );
 
     return res.status(200).json({

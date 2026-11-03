@@ -324,6 +324,22 @@ test("CORS origins reject wildcards and malformed values", () => {
   );
 });
 
+test("GPS configuration validates age, future skew, stale threshold, and retention bounds", () => {
+  const config = validateEnvironment({
+    GPS_MAX_AGE_SECONDS: "600",
+    GPS_MAX_FUTURE_SKEW_SECONDS: "15",
+    GPS_STALE_AFTER_SECONDS: "180",
+    GPS_LOCATION_RETENTION_DAYS: "60",
+  });
+  assert.equal(config.GPS_MAX_AGE_SECONDS, 600);
+  assert.equal(config.GPS_MAX_FUTURE_SKEW_SECONDS, 15);
+  assert.equal(config.GPS_STALE_AFTER_SECONDS, 180);
+  assert.equal(config.GPS_LOCATION_RETENTION_DAYS, 60);
+  assert.throws(() => validateEnvironment({ GPS_MAX_AGE_SECONDS: "10" }), /GPS_MAX_AGE_SECONDS/);
+  assert.throws(() => validateEnvironment({ GPS_STALE_AFTER_SECONDS: "1" }), /GPS_STALE_AFTER_SECONDS/);
+  assert.throws(() => validateEnvironment({ GPS_LOCATION_RETENTION_DAYS: "0" }), /GPS_LOCATION_RETENTION_DAYS/);
+});
+
 test("public tracking query omits recipient identity, addresses, and event descriptions", async (t) => {
   let query: { select: Record<string, unknown> } | undefined;
   replaceMethod(t, prisma.delivery, "findUnique", async (args: typeof query) => {

@@ -17,6 +17,8 @@ const metadataKeyAllowlist = new Set([
   "status",
   "changedFields",
   "sessionRevoked",
+  "previousAvailability",
+  "newAvailability",
 ]);
 
 const allowedMetadataValues: Record<string, Set<string>> = {
@@ -26,14 +28,16 @@ const allowedMetadataValues: Record<string, Set<string>> = {
   ]),
   previousRole: new Set(["SUPER_ADMIN", "ADMIN", "DISPATCHER", "DRIVER", "CUSTOMER"]),
   newRole: new Set(["SUPER_ADMIN", "ADMIN", "DISPATCHER", "DRIVER", "CUSTOMER"]),
-  previousStatus: new Set(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"]),
-  newStatus: new Set(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION"]),
+  previousStatus: new Set(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION", "PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED", "MAINTENANCE", "COMPLETED", "SCHEDULED", "VERIFIED", "REJECTED", "AVAILABLE", "UNAVAILABLE", "ON_BREAK", "OFF_DUTY"]),
+  newStatus: new Set(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION", "PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED", "MAINTENANCE", "COMPLETED", "SCHEDULED", "VERIFIED", "REJECTED", "AVAILABLE", "UNAVAILABLE", "ON_BREAK", "OFF_DUTY"]),
   fromStatus: new Set(["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"]),
   toStatus: new Set(["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"]),
   status: new Set(["ACTIVE", "INACTIVE", "SUSPENDED", "PENDING_VERIFICATION", "PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "DELIVERED", "CANCELLED"]),
+  previousAvailability: new Set(["AVAILABLE", "UNAVAILABLE", "ON_BREAK", "OFF_DUTY", "SUSPENDED"]),
+  newAvailability: new Set(["AVAILABLE", "UNAVAILABLE", "ON_BREAK", "OFF_DUTY", "SUSPENDED"]),
 };
 
-const allowedChangedFields = new Set(["firstName", "lastName", "email", "phone", "status", "driverId"]);
+const allowedChangedFields = new Set(["firstName", "lastName", "email", "phone", "status", "driverId", "vehicleId", "type", "maximumPayloadKg", "maximumVolumeCubicMeters", "refrigerated", "description", "registrationIdentifier", "requiredVehicleType", "minimumPayloadKg", "minimumVolumeCubicMeters", "requiresRefrigeratedTransport", "requiredQualifications", "startsAt", "endsAt", "timezone"]);
 
 /** Strictly allow only small, non-sensitive audit metadata. Never store arbitrary payloads. */
 export function sanitizeAuditMetadata(value: unknown): Prisma.InputJsonObject | undefined {

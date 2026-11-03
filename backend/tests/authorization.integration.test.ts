@@ -21,6 +21,7 @@ if (integrationUrl) {
 const prefix = `authorization-integration-${randomUUID()}`;
 const userIds: string[] = [];
 const deliveryIds: string[] = [];
+const vehicleIds: string[] = [];
 let prisma: (typeof import("../src/config/prisma.js"))["prisma"] | undefined;
 let accessSecret: string;
 
@@ -36,6 +37,15 @@ async function createUser(role: UserRole, status: "ACTIVE" | "SUSPENDED" = "ACTI
     },
   });
   userIds.push(user.id);
+  if (role === "DRIVER") {
+    const vehicle = await prisma!.vehicle.create({ data: {
+      registrationIdentifier: `A-${randomUUID().replaceAll("-", "").slice(0, 20)}`,
+      type: "VAN", maximumPayloadKg: 5_000, maximumVolumeCubicMeters: 25, refrigerated: true, status: "ACTIVE",
+    } });
+    vehicleIds.push(vehicle.id);
+    await prisma!.driverVehicleAssignment.create({ data: { driverId: user.id, vehicleId: vehicle.id } });
+    await prisma!.driverShift.create({ data: { driverId: user.id, startsAt: new Date(Date.now() - 3_600_000), endsAt: new Date(Date.now() + 86_400_000), timezone: "Etc/UTC", status: "ACTIVE" } });
+  }
   return user;
 }
 
@@ -97,7 +107,9 @@ after(async () => {
   if (!runIntegration || !prisma) return;
   try {
     if (deliveryIds.length) await prisma.delivery.deleteMany({ where: { id: { in: deliveryIds } } });
+    if (userIds.length) await prisma.driverVehicleAssignment.deleteMany({ where: { driverId: { in: userIds } } });
     if (userIds.length) await prisma.user.deleteMany({ where: { id: { in: userIds } } });
+    if (vehicleIds.length) await prisma.vehicle.deleteMany({ where: { id: { in: vehicleIds } } });
   } finally {
     const [{ closeRedisConnection }, { closeQueueRegistry }] = await Promise.all([
       import("../src/config/redis.js"),
@@ -194,5 +206,138 @@ test("delivery details and nested GPS reads are owner-scoped and hide other user
       method: "PATCH",
       headers: { authorization: authHeader(owner.id) },
     })).status, 200);
+  });
+});
+
+test("dispatch recommendations are staff-only, reject invalid or missing deliveries, and rate-limit requests", {
+  skip: !runIntegration,
+}, async () => {
+  const owner = await createUser("CUSTOMER");
+  const otherCustomer = await createUser("CUSTOMER");
+  const driver = await createUser("DRIVER");
+  const dispatcher = await createUser("DISPATCHER");
+  const delivery = await createDelivery(owner.id);
+  await prisma!.delivery.update({
+    where: { id: delivery.id },
+    data: { pickupLatitude: 41.7151, pickupLongitude: 44.8271 },
+  });
+  await prisma!.driverLocation.create({
+    data: { driverId: driver.id, latitude: 41.7151, longitude: 44.8271 },
+  });
+
+  await withApiServer(async (baseUrl) => {
+    const endpoint = `${baseUrl}/api/v1/dispatch/deliveries/${delivery.id}/recommendations`;
+    assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(owner.id) } })).status, 403);
+    assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(otherCustomer.id) } })).status, 403);
+    assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(driver.id, "DRIVER") } })).status, 403);
+    assert.equal((await fetch(`${baseUrl}/api/v1/dispatch/deliveries/not-a-uuid/recommendations`, {
+      headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") },
+    })).status, 400);
+    assert.equal((await fetch(`${baseUrl}/api/v1/dispatch/deliveries/${randomUUID()}/recommendations`, {
+      headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") },
+    })).status, 404);
+    const response = await fetch(endpoint, { headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") } });
+    assert.equal(response.status, 200);
+    const envelope = await response.json() as { data: { advisoryOnly: boolean; candidates: Array<{ driverId: string }> } };
+    assert.equal(envelope.data.advisoryOnly, true);
+    assert.equal(envelope.data.candidates.some((candidate) => candidate.driverId === driver.id), true);
+
+    let lastStatus = 200;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      lastStatus = (await fetch(endpoint, { headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") } })).status;
+    }
+    assert.equal(lastStatus, 429);
+  });
+});
+
+test("active driver locations are staff-only, paginated, and omit driver profile data", {
+  skip: !runIntegration,
+}, async () => {
+  const customer = await createUser("CUSTOMER");
+  const driver = await createUser("DRIVER");
+  const dispatcher = await createUser("DISPATCHER");
+  const delivery = await createDelivery(customer.id, driver.id);
+  await prisma!.driverLocation.updateMany({
+    where: { deliveryId: delivery.id },
+    data: { recordedAt: new Date(Date.now() - 600_000) },
+  });
+
+  await withApiServer(async (baseUrl) => {
+    const endpoint = `${baseUrl}/api/v1/drivers/active-locations?page=1&limit=10`;
+    assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(customer.id) } })).status, 403);
+    assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(driver.id, "DRIVER") } })).status, 403);
+
+    const response = await fetch(endpoint, { headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") } });
+    assert.equal(response.status, 200);
+    const body = await response.json() as {
+      data: Array<Record<string, unknown>>;
+      pagination: { total: number; page: number; limit: number };
+    };
+    const location = body.data.find((entry) => entry.deliveryId === delivery.id);
+    assert.ok(location);
+    assert.equal(location.driverId, driver.id);
+    assert.equal(location.isStale, true);
+    assert.equal("email" in location, false);
+    assert.equal("firstName" in location, false);
+    assert.equal(body.pagination.page, 1);
+    assert.equal(body.pagination.limit, 10);
+
+    for (let request = 1; request < 30; request += 1) {
+      assert.equal((await fetch(endpoint, { headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") } })).status, 200);
+    }
+    const limited = await fetch(endpoint, { headers: { authorization: authHeader(dispatcher.id, "DISPATCHER") } });
+    assert.equal(limited.status, 429);
+    assert.equal((await limited.json() as { code: string }).code, "RATE_LIMITED");
+  });
+});
+
+test("workforce and vehicle write routes are staff-authorized and nested qualification IDs stay driver-scoped", {
+  skip: !runIntegration,
+}, async () => {
+  const driver = await createUser("DRIVER");
+  const customer = await createUser("CUSTOMER");
+  const dispatcher = await createUser("DISPATCHER");
+  const admin = await createUser("ADMIN");
+  const qualification = await prisma!.driverQualification.create({
+    data: { driverId: driver.id, qualificationType: "AUTH_TEST", verificationStatus: "PENDING" },
+  });
+  const vehicleBody = {
+    registrationIdentifier: `AUTH-${randomUUID().replaceAll("-", "").slice(0, 18)}`,
+    type: "VAN",
+    maximumPayloadKg: 1_000,
+    maximumVolumeCubicMeters: 5,
+  };
+
+  await withApiServer(async (baseUrl) => {
+    const availabilityUrl = `${baseUrl}/api/v1/drivers/${driver.id}/availability`;
+    const availabilityRequest = (userId: string, role: UserRole) => fetch(availabilityUrl, {
+      method: "PATCH",
+      headers: { authorization: authHeader(userId, role), "content-type": "application/json" },
+      body: JSON.stringify({ availability: "ON_BREAK" }),
+    });
+    assert.equal((await availabilityRequest(customer.id, "CUSTOMER")).status, 403);
+    assert.equal((await availabilityRequest(dispatcher.id, "DISPATCHER")).status, 403);
+    assert.equal((await availabilityRequest(driver.id, "DRIVER")).status, 403);
+    assert.equal((await availabilityRequest(admin.id, "ADMIN")).status, 200);
+
+    const createVehicle = (userId: string, role: UserRole) => fetch(`${baseUrl}/api/v1/vehicles`, {
+      method: "POST",
+      headers: { authorization: authHeader(userId, role), "content-type": "application/json" },
+      body: JSON.stringify(vehicleBody),
+    });
+    assert.equal((await createVehicle(customer.id, "CUSTOMER")).status, 403);
+    assert.equal((await createVehicle(dispatcher.id, "DISPATCHER")).status, 403);
+    const createdVehicle = await createVehicle(admin.id, "ADMIN");
+    assert.equal(createdVehicle.status, 201);
+    const vehicleEnvelope = await createdVehicle.json() as { data: { id: string } };
+    vehicleIds.push(vehicleEnvelope.data.id);
+
+    const verifyUrl = `${baseUrl}/api/v1/drivers/${customer.id}/qualifications/${qualification.id}/verification`;
+    const crossDriverVerification = await fetch(verifyUrl, {
+      method: "PATCH",
+      headers: { authorization: authHeader(admin.id, "ADMIN"), "content-type": "application/json" },
+      body: JSON.stringify({ status: "VERIFIED" }),
+    });
+    assert.equal(crossDriverVerification.status, 404);
   });
 });
